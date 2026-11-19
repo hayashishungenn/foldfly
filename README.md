@@ -1,0 +1,43 @@
+# 一纸冲天 FoldFly
+
+TypeScript + Vite + Canvas 2D 的网页纸飞机工坊与几何驱动气动模拟。
+
+## 本地运行
+
+```sh
+npm install
+npm run dev
+```
+
+## 验证和构建
+
+```sh
+npm test
+npm run build
+npm run calibrate
+npm run calibrate -- --sweep
+npm run calibrate -- --convergence
+```
+
+## 功能与架构概览
+
+1. **真实纸张规格库（`src/paper/papers.ts`）**：
+   - 支持 5 种规格：`A4`（210×297 mm）、`US Letter`（215.9×279.4 mm）、`正方形`（150×150 mm）、`A5`（148×210 mm）、`B5`（176×250 mm）；
+   - 支持 3 档克重：`70 gsm`、`80 gsm`、`100 gsm`，附带纪录适用说明。
+2. **四款可交互折叠经典机型（`src/fold/planes/*.ts`）**：
+   - **经典尖头机（Classic Dart）**：6 步对称入门折法；
+   - **Suzanne（John Collins · 69.14 m 距离纪录）**：11 步宽翼面加厚前缘滑翔机折法；
+   - **Mach 5（Dillon Ruble 团队 · 88 m 距离纪录）**：9 步 X-43A 风格工程复刻折法（多折层机头配重、锁头、高机身窄翼展）；
+   - **Sky King（户田拓夫 · 27.9 s 滞空纪录）**：19 步大展弦比室内滞空机型折法。
+3. **纯逻辑折叠引擎与几何气动提取（`src/fold/`、`src/aero/`）**：
+   - 严格无 DOM / Canvas 依赖，支持全栈谷折/山折、局部区域折（`region`）、仅顶层折（`layer: 'top'`）、塞入下层（`tuckUnder`）、翻面（`flip`）、多折痕组合与三维斜翼根展开；
+   - `src/aero/extract.ts` 从折后纸层实时积分计算总质量 $m$、重心 $\text{CG}$、展开翼面积 $S$、翼展 $b$、展弦比 $\text{AR}$、四分之一弦气动焦点 $\text{AC}$、俯仰转动惯量 $I_{yy}$、机身侧视面积与浸润面积；
+   - `src/aero/integrator.ts` 与 `src/aero/model.ts` 采用 240 Hz 二阶中点法（RK2）积分纵向平面三自由度运动，所有气动配平与阻力极曲线均由无量纲几何特征（翼面饱满度、细长比、展弦比、静稳定裕度）平滑驱动。
+4. **四大历史标定锚点对照（`npm run calibrate`）**：
+   - **经典尖头机**（A4 80g，0° / 20 m/s）：`11.68 m`（参考区间 10–20 m）；
+   - **Suzanne**（A4 100g，0° / 28 m/s）：`68.69 m` / `8.02 s`（历史纪录 69.14 m / ~9 s）；
+   - **Mach 5**（A4 100g，40° / 28 m/s）：`89.99 m`（历史纪录 88 m）；
+   - **Sky King**（A4 80g，20° / 8 m/s）：`29.36 s`（历史纪录 27.9 s / 挑战赛锚点 29.2 s）。
+5. **渲染、音效、挑战赛与分享（`src/render/`、`src/game/`、`src/audio/`）**：
+   - 遵循 `docs/DESIGN.md`「作业本 × 航空图鉴」视觉规范；
+   - 支持距离挑战（88 m）与滞空挑战（29.2 s）、本机最佳幽灵机同屏重放、破纪录纸屑雨动效、URL `#flight=` 确定性配置分享及 Web Audio 程序化折纸/风声/落地音效。

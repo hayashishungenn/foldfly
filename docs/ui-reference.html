@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>一纸冲天 FoldFly · 设计风格与 UI 参考</title>
+<style>
+  :root {
+    --paper: #FAF6EE; --grid-line: #C9DCEB; --ink: #1F3A5F; --pencil: #6B7280;
+    --sky: #8FC7E8; --sky-hi: #DCEFF9; --grass: #7FA86B; --mark-red: #D9482B;
+    --gold: #C9A227; --paper-back: #E8E2D4; --line: #d8d2c4;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--paper); color: var(--ink);
+    font-family: "LXGW WenKai", "Kaiti SC", "KaiTi", "PingFang SC", "Noto Sans SC", sans-serif;
+    background-image: linear-gradient(var(--grid-line) 1px, transparent 1px),
+                      linear-gradient(90deg, var(--grid-line) 1px, transparent 1px);
+    background-size: 28px 28px;
+  }
+  .sheet { max-width: 1080px; margin: 0 auto; padding: 32px 24px 64px; }
+  header h1 { font-size: 34px; margin: 8px 0 4px; letter-spacing: 2px; }
+  header p { color: var(--pencil); margin: 0 0 8px; }
+  .red-stamp {
+    display: inline-block; border: 2px solid var(--mark-red); color: var(--mark-red);
+    padding: 2px 10px; border-radius: 4px; transform: rotate(-2deg);
+    font-size: 13px; letter-spacing: 4px;
+  }
+  h2 { font-size: 20px; margin: 44px 0 12px; border-bottom: 2px solid var(--ink); display: inline-block; padding-bottom: 2px; }
+  .note { color: var(--pencil); font-size: 13px; }
+
+  /* 色板 */
+  .swatches { display: flex; flex-wrap: wrap; gap: 12px; }
+  .swatch { width: 132px; border: 1.5px solid var(--ink); border-radius: 8px; overflow: hidden; background: #fff; }
+  .swatch .chip { height: 64px; }
+  .swatch .meta { padding: 6px 10px; font-size: 12px; line-height: 1.5; }
+  .swatch .meta b { font-size: 13px; }
+
+  /* 字体 */
+  .type-spec { border: 1.5px solid var(--ink); border-radius: 8px; padding: 18px 22px; background: #fffdf8; }
+  .type-spec .t-h1 { font-size: 26px; }
+  .type-spec .t-h2 { font-size: 19px; color: var(--ink); }
+  .type-spec .t-body { font-size: 14px; color: var(--ink); }
+  .type-spec .t-mono { font-family: "IBM Plex Mono", ui-monospace, Menlo, monospace; font-size: 14px; }
+  .type-spec .t-note { font-size: 13px; color: var(--pencil); transform: rotate(-1deg); display: inline-block; }
+
+  /* 线框 */
+  .frames { display: flex; flex-wrap: wrap; gap: 20px; }
+  .frame { flex: 1 1 300px; max-width: 340px; border: 1.5px solid var(--ink); border-radius: 10px; background: #fffdf8; overflow: hidden; }
+  .frame h3 { font-size: 14px; margin: 0; padding: 8px 12px; background: var(--ink); color: var(--paper); font-weight: normal; letter-spacing: 1px; }
+  .frame .body { padding: 12px; display: flex; flex-direction: column; gap: 8px; }
+  .zone { border: 1.5px dashed var(--pencil); border-radius: 6px; padding: 8px 10px; font-size: 12px; color: var(--pencil); }
+  .zone b { color: var(--ink); font-weight: normal; }
+  .zone.canvas { min-height: 120px; background: repeating-linear-gradient(45deg, transparent 0 10px, rgba(107,114,128,.06) 10px 11px); }
+  .zone.row { display: flex; gap: 8px; }
+  .zone.row span { flex: 1; text-align: center; }
+
+  /* 组件 */
+  .components { display: flex; flex-wrap: wrap; gap: 24px; align-items: flex-start; }
+  .comp { flex: 1 1 300px; }
+  .btn { display: inline-block; font: inherit; font-size: 14px; border-radius: 6px; padding: 6px 18px; margin: 0 8px 8px 0; border: 1.5px solid var(--ink); background: #fffdf8; color: var(--ink); }
+  .btn.primary { background: var(--ink); color: var(--paper); }
+  .btn.accent { border-color: var(--mark-red); color: var(--mark-red); background: transparent; }
+  .fold-legend { font-size: 13px; line-height: 2.1; }
+  .valley { border-bottom: 2px dashed var(--ink); padding: 0 42px 2px; }
+  .mountain { border-bottom: 2px dotted var(--mark-red); padding: 0 42px 2px; }
+  .crease-hist { border-bottom: 1.5px dashed var(--grid-line); padding: 0 42px 2px; filter: saturate(.6); }
+  .record-card { border: 1.5px solid var(--ink); border-radius: 10px; background: #fffdf8; width: 300px; }
+  .record-card .top { background: linear-gradient(135deg, var(--ink), #2c5080); color: #fff; padding: 10px 14px; border-radius: 9px 9px 0 0; font-size: 13px; }
+  .record-card .top .gold { color: var(--gold); }
+  .record-card .stats { display: flex; }
+  .record-card .stat { flex: 1; text-align: center; padding: 10px 4px; border-right: 1px solid var(--line); }
+  .record-card .stat:last-child { border-right: 0; }
+  .record-card .num { font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 20px; }
+  .record-card .lbl { font-size: 11px; color: var(--pencil); }
+  .record-card .story { padding: 10px 14px 12px; font-size: 12.5px; line-height: 1.7; color: var(--ink); border-top: 1px solid var(--line); }
+  .flight-strip { position: relative; height: 120px; border: 1.5px solid var(--ink); border-radius: 8px; overflow: hidden;
+    background: linear-gradient(var(--sky), var(--sky-hi) 70%, var(--grass) 70%); }
+  .flight-strip .plane { position: absolute; left: 38%; top: 34%; transform: rotate(-14deg); font-size: 18px; }
+  .flight-strip .trace { position: absolute; left: 8%; top: 60%; width: 45%; border-top: 1.5px dashed rgba(31,58,95,.5); transform: rotate(-12deg); transform-origin: left; }
+  .flight-strip .tick { position: absolute; bottom: 2px; font-size: 10px; color: #fdfbf5; font-family: ui-monospace, monospace; }
+  .flight-strip .recordline { position: absolute; left: 6%; right: 6%; top: 24%; border-top: 1.5px solid var(--mark-red); }
+  .flight-strip .recordline i { position: absolute; right: 0; top: -16px; font-style: normal; font-size: 10px; color: var(--mark-red); }
+</style>
+</head>
+<body>
+<div class="sheet">
+  <header>
+    <span class="red-stamp">一纸冲天</span>
+    <h1>FoldFly · 设计风格与 UI 参考</h1>
+    <p>「作业本 × 航空图鉴」——纸是主角,装饰不得比那张纸更抢眼。规范详情见 docs/DESIGN.md</p>
+  </header>
+
+  <h2>一、色板</h2>
+  <div class="swatches">
+    <div class="swatch"><div class="chip" style="background:#FAF6EE;border-bottom:1px solid var(--line)"></div><div class="meta"><b>--paper #FAF6EE</b><br>纸面底色</div></div>
+    <div class="swatch"><div class="chip" style="background:#1F3A5F"></div><div class="meta"><b>--ink #1F3A5F</b><br>墨水蓝:正文/主按钮</div></div>
+    <div class="swatch"><div class="chip" style="background:#6B7280"></div><div class="meta"><b>--pencil #6B7280</b><br>铅笔灰:次级文字</div></div>
+    <div class="swatch"><div class="chip" style="background:linear-gradient(#8FC7E8,#DCEFF9)"></div><div class="meta"><b>--sky #8FC7E8</b><br>试飞场天空渐变</div></div>
+    <div class="swatch"><div class="chip" style="background:#D9482B"></div><div class="meta"><b>--mark-red #D9482B</b><br>朱红批注:纪录/山折</div></div>
+    <div class="swatch"><div class="chip" style="background:#C9A227"></div><div class="meta"><b>--gold #C9A227</b><br>荣誉金:徽章/图鉴</div></div>
+    <div class="swatch"><div class="chip" style="background:#7FA86B"></div><div class="meta"><b>--grass #7FA86B</b><br>地面草地</div></div>
+    <div class="swatch"><div class="chip" style="background:#E8E2D4"></div><div class="meta"><b>纸背 #E8E2D4</b><br>翻面后的纸背色</div></div>
+  </div>
+
+  <h2>二、字体规范</h2>
+  <div class="type-spec">
+    <div class="t-h1">标题:霞鹜文楷 LXGW WenKai(开源手写楷体)</div>
+    <div class="t-h2">二级标题:同字体,字号分层,不用粗体堆叠</div>
+    <div class="t-body">正文:投掷角度、风力这些参数要用真实单位,文案要有"课堂讲义"的口吻。</div>
+    <div class="t-mono">数字:IBM Plex Mono → 40° · 12.0 m/s · 88.0 m · 29.2 s</div>
+    <div class="t-note">批注:微旋转 −1°,像老师的红笔字。</div>
+  </div>
+
+  <h2>三、关键界面线框</h2>
+  <div class="frames">
+    <div class="frame">
+      <h3>① 选纸页</h3>
+      <div class="body">
+        <div class="zone"><b>步骤条</b>: ①选纸 → ②选机型 → ③折纸 → ④试飞</div>
+        <div class="zone"><b>纸张规格卡网格</b>:A4 / Letter / 正方形;70·80·100 gsm;卡上标注「Mach 5 同款」等提示</div>
+        <div class="zone row"><span>A4</span><span>Letter</span><span>正方形</span></div>
+        <div class="zone row"><span>70g</span><span>80g</span><span>100g</span></div>
+        <div class="zone"><b>下一页 →</b>(主按钮,右对齐)</div>
+      </div>
+    </div>
+    <div class="frame">
+      <h3>② 折纸页</h3>
+      <div class="body">
+        <div class="zone"><b>步骤标题</b>:第 2 步 · 上两角折向中线(含一句话讲义)</div>
+        <div class="zone canvas"><b>画布</b>:纸张居中,标准折痕记号 + 折叠方向箭头</div>
+        <div class="zone row"><span>上一步</span><span>自动演示</span><span>下一步(主)</span></div>
+      </div>
+    </div>
+    <div class="frame">
+      <h3>③ 试飞页</h3>
+      <div class="body">
+        <div class="zone canvas"><b>世界画布</b>:天空 / 草地 / 距离刻度 / 纪录线</div>
+        <div class="zone"><b>结算行</b>:距离 · 滞空 · 最高高度(等宽数字,aria-live)</div>
+        <div class="zone row"><span>角度滑杆</span><span>力度滑杆</span><span>风滑杆</span></div>
+        <div class="zone row"><span>投掷(主)</span><span>换一架</span><span>挑战赛</span></div>
+      </div>
+    </div>
+  </div>
+
+  <h2>四、核心组件</h2>
+  <div class="components">
+    <div class="comp">
+      <p class="note">折纸记号(国际标准,UI 兼做科普)</p>
+      <div class="fold-legend">
+        <div><span class="valley"></span>&nbsp; 谷折(虚线 + 空心箭头)</div>
+        <div><span class="mountain"></span>&nbsp; 山折(点划线,朱红)</div>
+        <div><span class="crease-hist"></span>&nbsp; 已有折痕(淡蓝虚线保留)</div>
+      </div>
+      <p class="note">按钮层级</p>
+      <div>
+        <button class="btn primary" type="button">投掷</button>
+        <button class="btn" type="button">下一步</button>
+        <button class="btn accent" type="button">挑战纪录</button>
+      </div>
+    </div>
+    <div class="comp">
+      <p class="note">试飞场景元素</p>
+      <div class="flight-strip">
+        <div class="trace"></div>
+        <div class="plane">✈</div>
+        <div class="recordline"><i>世界纪录 88.0 m</i></div>
+        <span class="tick" style="left:10%">0 m</span>
+        <span class="tick" style="left:45%">20 m</span>
+        <span class="tick" style="left:80%">40 m</span>
+      </div>
+      <p class="note">轨迹=淡蓝虚线;纪录线=朱红细线(挑战目标);刻度用等宽数字</p>
+    </div>
+    <div class="comp">
+      <p class="note">图鉴档案卡(航空图鉴层)</p>
+      <div class="record-card">
+        <div class="top"><span class="gold">★ 世界纪录</span> · MACH 5 · 2022</div>
+        <div class="stats">
+          <div class="stat"><div class="num">88.0 m</div><div class="lbl">距离</div></div>
+          <div class="stat"><div class="num">A4</div><div class="lbl">用纸</div></div>
+          <div class="stat"><div class="num">40°</div><div class="lbl">最佳投掷角</div></div>
+        </div>
+        <div class="story">波音三位工程师耗时约 500 小时,灵感来自 NASA X-43A 高超声速飞行器。2022 年 12 月创造 88 m 现役纪录。</div>
+      </div>
+    </div>
+  </div>
+
+  <p class="note" style="margin-top:44px">注:页面中的方格背景即全局背景纹理(--grid-line,28px 网格);线框中的虚线框为内容分区示意,非最终视觉。</p>
+</div>
+</body>
+</html>
