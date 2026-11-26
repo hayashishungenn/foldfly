@@ -906,3 +906,114 @@ function drawPolarAndEnergyInset(
 
   c.restore();
 }
+
+export type ComparisonFlightEntry = {
+  label: string;
+  flight: Flight;
+  scoreText: string;
+};
+
+/**
+ * Render an overlay comparison canvas for the Competition Settlement view,
+ * plotting each player's best valid trajectory using the DESIGN.md palette.
+ */
+export function renderComparisonCanvas(
+  canvas: HTMLCanvasElement,
+  entries: readonly ComparisonFlightEntry[],
+): void {
+  const c = canvas.getContext('2d')!;
+  const palette = ['#1F3A5F', '#D9482B', '#C9A227', '#6B7280'];
+  const flights = entries.map(e => e.flight);
+  const cam = computeFlightCamera(
+    flights[0] ?? {samples: [{t: 0, x: 0, y: 1.5, pitch: 0}], distance: 10, duration: 1, height: 4, landed: true},
+    null,
+    null,
+    0,
+    {followCamera: false, hidePreview: false},
+  );
+  // Expand bounds to cover all entries
+  let minX = 0;
+  let maxX = 12;
+  let maxY = 4;
+  for (const f of flights) {
+    maxY = Math.max(maxY, f.height);
+    for (const s of f.samples) {
+      minX = Math.min(minX, s.x);
+      maxX = Math.max(maxX, s.x);
+      maxY = Math.max(maxY, s.y);
+    }
+  }
+  const scaleX = 840 / Math.max(1, maxX - minX);
+  const mapX = (x: number) => 60 + (x - minX) * scaleX;
+  const sy = 460 / maxY;
+
+  const skyGrad = c.createLinearGradient(0, 0, 0, 520);
+  skyGrad.addColorStop(0, '#8FC7E8');
+  skyGrad.addColorStop(1, '#DCEFF9');
+  c.fillStyle = skyGrad;
+  c.fillRect(0, 0, 960, 520);
+
+  c.fillStyle = '#7FA86B';
+  c.fillRect(0, 520, 960, 80);
+  drawGrassBlades(c, minX, maxX, mapX);
+  c.strokeStyle = '#1F3A5F';
+  c.lineWidth = 1.5;
+  c.beginPath();
+  c.moveTo(0, 520);
+  c.lineTo(960, 520);
+  c.stroke();
+
+  entries.forEach((entry, idx) => {
+    const color = palette[idx % palette.length];
+    c.save();
+    c.beginPath();
+    entry.flight.samples.forEach((p, i) => {
+      const x = mapX(p.x);
+      const y = 520 - p.y * sy;
+      if (i) c.lineTo(x, y);
+      else c.moveTo(x, y);
+    });
+    c.strokeStyle = color;
+    c.lineWidth = idx === 0 ? 3 : 2.2;
+    c.setLineDash(idx === 0 ? [] : [8, 5]);
+    c.stroke();
+    c.setLineDash([]);
+
+    // Landing marker
+    const lx = mapX(entry.flight.distance);
+    c.fillStyle = color;
+    c.beginPath();
+    c.arc(lx, 520, 4.5, 0, Math.PI * 2);
+    c.fill();
+    c.restore();
+  });
+
+  // Legend box top-left
+  c.save();
+  const boxH = 20 + entries.length * 20;
+  c.fillStyle = 'rgba(250, 246, 238, 0.92)';
+  c.strokeStyle = '#1F3A5F';
+  c.lineWidth = 1;
+  c.fillRect(24, 16, 290, boxH);
+  c.strokeRect(24, 16, 290, boxH);
+  c.font = "12px 'IBM Plex Mono', monospace";
+  c.textAlign = 'left';
+  entries.forEach((entry, idx) => {
+    const color = palette[idx % palette.length];
+    const y = 36 + idx * 20;
+    c.fillStyle = color;
+    c.fillRect(36, y - 8, 12, 4);
+    c.fillStyle = '#1F3A5F';
+    c.fillText(`${entry.label} · ${entry.scoreText}`, 56, y - 2);
+  });
+  c.restore();
+
+  // Distance scale labels
+  c.font = "16px 'IBM Plex Mono', monospace";
+  c.fillStyle = '#1F3A5F';
+  c.textAlign = 'left';
+  for (let i = 0; i <= 4; i++) {
+    c.fillText(`${(minX + ((maxX - minX) * i) / 4).toFixed(0)} m`, 60 + (840 * i) / 4, 558);
+  }
+  void cam;
+}

@@ -141,10 +141,29 @@ input{width:100%;accent-color:var(--ink);margin:14px 0}
 .recommendation b{font-weight:400;color:var(--ink)}
 .recommendation button{font-size:13px;padding:8px 12px}
 .shared-result{border-left:3px solid var(--mark-red);padding:8px 12px;margin:12px 0;color:var(--ink);font-size:13px}
+.mode-switch{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}
+.mode-switch button{padding:8px 14px;min-height:44px}
+.comp-setup,.comp-banner,.comp-board{margin-top:14px;padding:14px 16px;border:1.5px solid var(--ink);border-radius:8px;background:var(--paper)}
+.comp-banner{border-left:4px solid var(--gold);display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
+.comp-banner strong{font-weight:400;font-size:17px;color:var(--ink)}
+.comp-banner span{font-size:13px;color:var(--pencil)}
+.comp-row{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin:10px 0}
+.comp-players{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin:12px 0}
+.comp-player-card{border:1px dashed var(--grid-line);border-radius:6px;padding:10px 12px;display:flex;flex-direction:column;gap:8px}
+.comp-player-card input,.comp-player-card select{font:inherit;color:var(--ink);background:var(--paper);border:1px solid var(--ink);border-radius:5px;padding:8px 10px;min-height:44px;margin:0;width:100%}
+.standings-table{width:100%;border-collapse:collapse;margin-top:10px;font-size:13px}
+.standings-table th,.standings-table td{padding:9px 8px;border-bottom:1px solid var(--grid-line);text-align:left}
+.standings-table th{color:var(--pencil);font-weight:400}
+.standings-table tr.leader{background:rgba(201,162,39,.12)}
+.champion-banner{background:var(--ink);color:var(--paper);padding:18px 20px;border-radius:8px;margin-bottom:16px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px}
+.champion-banner h3{margin:0;font-size:22px;color:var(--gold)}
+.champion-banner p{margin:4px 0 0;color:var(--grid-line);font-size:13px}
+.pb-tag{color:var(--gold);font-size:12px;border:1px solid var(--gold);border-radius:4px;padding:2px 8px}
+.invalid-score{color:var(--mark-red)}
 @media(max-width:600px){
   main{padding:22px 12px 40px}
   section{padding:18px}
-  .cards,.archive-grid,.plane-choices,.phase-list{grid-template-columns:1fr}
+  .cards,.archive-grid,.plane-choices,.phase-list,.comp-players{grid-template-columns:1fr}
   .card{display:grid;grid-template-columns:48px 1fr;align-items:center}
   .paper-icon{grid-row:span 3;margin:0}
   .controls{grid-template-columns:1fr;gap:8px}

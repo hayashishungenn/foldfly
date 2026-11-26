@@ -4,6 +4,22 @@ import {Sound} from './audio/sound';
 import {challengeResult, type Challenge} from './game/challenge';
 import {bestFlight, decodeGhost, encodeGhost, ghostStorageKey} from './game/ghost';
 import {mapDragToThrow, type CanvasPoint, type DragThrowResult} from './game/throw-control';
+import {
+  abortCompetitionMatch,
+  competitionPbKey,
+  computeStandings,
+  createCompetitionMatch,
+  currentTurn,
+  decodeCompetitionPb,
+  encodeCompetitionPb,
+  generateRoundWinds,
+  recordCompetitionThrow,
+  type CompetitionEvent,
+  type CompetitionMatch,
+  type CompetitionPersonalBest,
+  type CompetitionPlayer,
+  type ThrowRecord,
+} from './game/competition';
 import './style.css';
 import {papers, weights, weightHints} from './paper/papers';
 import {planes, archives, type PlaneId} from './fold/planes';
@@ -25,7 +41,12 @@ import {analyzeFlight} from './aero/diagnostics';
 import {analyzeTrajectoryPhases, computeAeroPolar, sweepLaunchAngles} from './aero/polar';
 import {simulate, FLIGHT_MODEL_VERSION, type Flight, type Throw} from './aero/integrator';
 import {foldViewport, renderFoldCanvas, renderPlaneBlueprintSvg, type FoldViewMode} from './render/fold2d';
-import {flightLaunchAnchor, renderFlightCanvas} from './render/flight2d';
+import {
+  flightLaunchAnchor,
+  renderComparisonCanvas,
+  renderFlightCanvas,
+  type ComparisonFlightEntry,
+} from './render/flight2d';
 
 const app = document.querySelector<HTMLDivElement>('#app')!;
 const sound = new Sound();
@@ -39,14 +60,14 @@ let manualFoldMode = true;
 let foldHint = false;
 let dragStatus: DragStatus = 'idle';
 let dragProgress = 0;
-let stage: 'paper' | 'fold' | 'flight' = 'paper';
+let stage: 'paper' | 'fold' | 'flight' | 'settlement' = 'paper';
 let foldViewMode: FoldViewMode = 'folded';
 let auto = false;
 let animating = false;
 let flight: Flight | null = null;
 let previousFlight: Flight | null = null;
-let showForces = true;
-let showPolar = true;
+let showForces = false;
+let showPolar = false;
 let followCamera = true;
 let flightPaused = false;
 let pausedElapsed = 0;
@@ -59,6 +80,54 @@ let speed = 15;
 let wind = 0;
 let challenge: Challenge = 'distance';
 let plane: PlaneId = 'dart';
+
+// Official local competition state (independent from free experiment mode)
+let flightMode: 'free' | 'competition' = 'free';
+let compEvent: CompetitionEvent = 'distance';
+let compPlayerCount: 1 | 2 | 3 | 4 = 1;
+let compSeed = 20261126;
+let compSetupPlayers: CompetitionPlayer[] = [
+  {id: 'p1', name: '选手 1', plane: 'dart'},
+  {id: 'p2', name: '选手 2', plane: 'suzanne'},
+  {id: 'p3', name: '选手 3', plane: 'mach5'},
+  {id: 'p4', name: '选手 4', plane: 'skyking'},
+];
+let activeMatch: CompetitionMatch | null = null;
+let compLastRecord: ThrowRecord | null = null;
+let compThrowRecorded = false;
+let compThrowFlights = new Map<string, Flight>();
+let compNewPb = false;
+
+function loadCompetitionPb(event: CompetitionEvent): CompetitionPersonalBest | null {
+  try {
+    return decodeCompetitionPb(localStorage.getItem(competitionPbKey(event)), event);
+  } catch {
+    return null;
+  }
+}
+
+function saveCompetitionPbIfBetter(match: CompetitionMatch): boolean {
+  const standings = computeStandings(match);
+  const top = standings[0];
+  if (!top || top.bestScore === null || !top.bestThrow) return false;
+  const existing = loadCompetitionPb(match.event);
+  if (existing && existing.score >= top.bestScore) return false;
+  const pb: CompetitionPersonalBest = {
+    event: match.event,
+    score: top.bestScore,
+    playerName: top.player.name,
+    plane: top.player.plane,
+    paper: match.paper,
+    gsm: match.gsm,
+    seed: match.seed,
+    modelVersion: FLIGHT_MODEL_VERSION,
+    recordedAt: new Date().toISOString(),
+  };
+  try {
+    localStorage.setItem(competitionPbKey(match.event), encodeCompetitionPb(pb));
+  } catch {}
+  return true;
+}
 
 const currentPlane = () => planes[plane];
 const ghosts: Record<string, Flight | null> = {};
@@ -118,7 +187,8 @@ let legacyMessage = shared
 const reduced = matchMedia('(prefers-reduced-motion: reduce)');
 
 function shell(content: string) {
-  app.innerHTML = `<main><header><span class="stamp">一纸冲天</span><h1>FoldFly <small>纸飞机工坊</small></h1><p>一张纸，一次认真折叠，一段自己的飞行。</p><button class="sound-toggle" id="sound-toggle" aria-pressed="${sound.enabled}">${sound.enabled ? '声音开启' : '声音关闭'}</button></header><nav aria-label="进度"><span class="${stage === 'paper' ? 'active' : ''}">① 选纸</span><span class="${stage === 'fold' ? 'active' : ''}">② 折纸</span><span class="${stage === 'flight' ? 'active' : ''}">③ 试飞</span></nav>${content}</main>`;
+  const workshopActive = stage === 'paper' || stage === 'fold';
+  app.innerHTML = `<main><header><span class="stamp">一纸冲天</span><h1>FoldFly <small>纸飞机工坊</small></h1><p>一张纸，一次认真折叠，一段自己的飞行。</p><button class="sound-toggle" id="sound-toggle" aria-pressed="${sound.enabled}">${sound.enabled ? '声音开启' : '声音关闭'}</button></header><nav aria-label="进度"><span class="${workshopActive ? 'active' : ''}">① 折纸工坊</span><span class="${stage === 'flight' ? 'active' : ''}">② 飞行赛场</span><span class="${stage === 'settlement' ? 'active' : ''}">③ 比赛结算</span></nav>${content}</main>`;
   document.querySelector<HTMLButtonElement>('#sound-toggle')!.onclick = () => {
     const enabled = sound.toggle();
     const button = document.querySelector<HTMLButtonElement>('#sound-toggle')!;
@@ -429,19 +499,244 @@ function render() {
     return;
   }
 
-  const aero = extract(replay(papers[paper], currentPlane().steps.length, currentPlane().steps), gsm);
+  if (stage === 'settlement' && activeMatch && activeMatch.status === 'finished') {
+    const standings = computeStandings(activeMatch);
+    const unit = activeMatch.event === 'distance' ? 'm' : 's';
+    const eventLabel = activeMatch.event === 'distance' ? '距离赛' : '滞空赛';
+    const matchPaper = papers.find(p => p.id === activeMatch!.paper) ?? papers[0];
+    const champions = standings.filter(s => s.rank === 1 && s.bestScore !== null);
+    const pb = loadCompetitionPb(activeMatch.event);
+    const champTitle =
+      champions.length === 0
+        ? '本场无有效成绩'
+        : champions.length === 1
+          ? `冠军：${champions[0].player.name}（${champions[0].bestScore!.toFixed(2)} ${unit}）`
+          : `并列冠军：${champions.map(c => c.player.name).join(' / ')}（${champions[0].bestScore!.toFixed(2)} ${unit}）`;
+
+    const fmtRound = (r?: ThrowRecord) => {
+      if (!r) return '—';
+      if (!r.valid || r.score === null) return `<span class="invalid-score">无效</span>`;
+      return `${r.score.toFixed(1)} ${unit}`;
+    };
+
+    const rowsHtml = standings
+      .map(s => {
+        const r1 = s.throws.find(t => t.round === 1);
+        const r2 = s.throws.find(t => t.round === 2);
+        const r3 = s.throws.find(t => t.round === 3);
+        const rankText = s.bestScore === null ? '—' : s.tied ? `T${s.rank}` : `#${s.rank}`;
+        return `<tr class="${s.rank === 1 && s.bestScore !== null ? 'leader' : ''}"><td class="mono">${rankText}</td><td>${s.player.name}</td><td>${planes[s.player.plane].name}</td><td class="mono">${fmtRound(r1)}</td><td class="mono">${fmtRound(r2)}</td><td class="mono">${fmtRound(r3)}</td><td class="mono"><b>${s.bestScore !== null ? `${s.bestScore.toFixed(2)} ${unit}` : '无有效成绩'}</b></td></tr>`;
+      })
+      .join('');
+
+    shell(
+      `<section><div class="section-head"><div><p class="eyebrow">03 / 比赛结算 · ${eventLabel}</p><h2>正式比赛排行榜</h2><p>${matchPaper.name} · ${activeMatch.gsm} gsm · 风场种子 #${activeMatch.seed} · 物理模型 v${activeMatch.modelVersion}</p></div><div class="flight-head-tools"><button id="comp-rematch" class="primary">再来一场 →</button><button id="comp-back-free">返回自由实验</button></div></div><div class="champion-banner"><div><h3>${champTitle}</h3><p>每轮锁定风场：${activeMatch.roundWinds.map((w, i) => `R${i + 1} ${w >= 0 ? '+' : ''}${w.toFixed(1)}m/s`).join(' · ')}</p></div>${compNewPb ? '<span class="pb-tag mono">★ 刷新正式赛个人最佳！</span>' : pb ? `<span class="pb-tag mono">正式赛个人最佳 ${pb.score.toFixed(2)} ${unit} (${pb.playerName})</span>` : ''}</div><div class="canvas-wrap"><canvas id="comp-compare" width="960" height="600" aria-label="选手最佳轨迹对比"></canvas></div><div class="comp-board"><h3>三回合详细成绩</h3><table class="standings-table"><thead><tr><th>排名</th><th>选手</th><th>机型</th><th>第 1 投</th><th>第 2 投</th><th>第 3 投</th><th>最佳有效成绩</th></tr></thead><tbody>${rowsHtml}</tbody></table></div><div class="actions"><button id="comp-reconfig">重新配置赛制与选手</button><button id="comp-go-workshop">返回折纸工坊</button><span class="spacer"></span><button class="primary" id="comp-rematch-bottom">原班人马再来一场 →</button></div></section>`,
+    );
+
+    const compareCanvas = document.querySelector<HTMLCanvasElement>('#comp-compare')!;
+    const entries: ComparisonFlightEntry[] = [];
+    for (const s of standings) {
+      if (!s.bestThrow || s.bestScore === null) continue;
+      const key = `${s.player.id}-${s.bestThrow.round}`;
+      let f = compThrowFlights.get(key);
+      if (!f) {
+        const pSheet = papers.find(p => p.id === activeMatch!.paper) ?? papers[0];
+        const a = extract(replay(pSheet, planes[s.player.plane].steps.length, planes[s.player.plane].steps), activeMatch.gsm);
+        f = simulate(a, s.bestThrow.launch);
+      }
+      entries.push({
+        label: `#${s.rank} ${s.player.name} (${planes[s.player.plane].name})`,
+        flight: f,
+        scoreText: `${s.bestScore.toFixed(2)} ${unit}`,
+      });
+    }
+    renderComparisonCanvas(compareCanvas, entries);
+
+    const startRematch = () => {
+      compSeed = (compSeed * 1664525 + 1013904223) >>> 0;
+      activeMatch = createCompetitionMatch({
+        event: activeMatch!.event,
+        paper: activeMatch!.paper,
+        gsm: activeMatch!.gsm,
+        seed: compSeed,
+        players: activeMatch!.players,
+      });
+      compLastRecord = null;
+      compThrowRecorded = false;
+      compThrowFlights = new Map();
+      compNewPb = false;
+      flight = null;
+      flightMode = 'competition';
+      stage = 'flight';
+      render();
+    };
+    document.querySelector<HTMLButtonElement>('#comp-rematch')!.onclick = startRematch;
+    document.querySelector<HTMLButtonElement>('#comp-rematch-bottom')!.onclick = startRematch;
+    document.querySelector<HTMLButtonElement>('#comp-reconfig')!.onclick = () => {
+      activeMatch = null;
+      compLastRecord = null;
+      compThrowRecorded = false;
+      flight = null;
+      flightMode = 'competition';
+      stage = 'flight';
+      render();
+    };
+    document.querySelector<HTMLButtonElement>('#comp-back-free')!.onclick = () => {
+      flightMode = 'free';
+      activeMatch = null;
+      flight = null;
+      stage = 'flight';
+      render();
+    };
+    document.querySelector<HTMLButtonElement>('#comp-go-workshop')!.onclick = () => {
+      activeMatch = null;
+      flight = null;
+      stage = 'paper';
+      render();
+    };
+    return;
+  }
+
+  // Stage: Flight Arena (supports both Free Experiment and Official Local Competition)
+  const isOfficialActive =
+    flightMode === 'competition' &&
+    activeMatch !== null &&
+    (activeMatch.status === 'in-progress' || (activeMatch.status === 'finished' && compThrowRecorded));
+  const activeTurn = isOfficialActive ? currentTurn(activeMatch!) : null;
+  const lastCompPlayer =
+    isOfficialActive && !activeTurn && compLastRecord
+      ? activeMatch!.players.find(p => p.id === compLastRecord!.playerId) ?? activeMatch!.players[0]
+      : null;
+  const activeSheet = isOfficialActive ? (papers.find(p => p.id === activeMatch!.paper) ?? papers[paper]) : papers[paper];
+  const activeGsm = isOfficialActive ? activeMatch!.gsm : gsm;
+  const activePlaneId: PlaneId = activeTurn ? activeTurn.player.plane : lastCompPlayer ? lastCompPlayer.plane : plane;
+  const activePlaneDef = planes[activePlaneId];
+  const activeWind = activeTurn ? activeTurn.wind : compLastRecord ? compLastRecord.launch.wind : wind;
+  const activeChallenge: Challenge = isOfficialActive ? activeMatch!.event : challenge;
+
+  if (flightMode === 'competition' && !isOfficialActive) {
+    compSetupPlayers[0].plane = compSetupPlayers[0].plane || plane;
+    const previewWinds = generateRoundWinds(compSeed, 3);
+    const pbDist = loadCompetitionPb('distance');
+    const pbDur = loadCompetitionPb('duration');
+    const planeOptions = (selected: PlaneId) =>
+      Object.values(planes)
+        .map(p => `<option value="${p.id}" ${p.id === selected ? 'selected' : ''}>${p.name}</option>`)
+        .join('');
+    const playersHtml = compSetupPlayers
+      .slice(0, compPlayerCount)
+      .map(
+        (pl, idx) => `<div class="comp-player-card"><label class="mono">选手 ${idx + 1} 姓名<input type="text" data-comp-name="${idx}" value="${pl.name}" maxlength="16"></label><label class="mono">参赛机型<select data-comp-plane="${idx}">${planeOptions(pl.plane)}</select></label></div>`,
+      )
+      .join('');
+
+    shell(
+      `<section><div class="section-head"><div><p class="eyebrow">02 / 飞行赛场 · 正式比赛</p><h2>配置本地飞行锦标赛</h2><p>同场比赛锁定纸张、克重与确定性风场种子；每人 3 投取最佳有效成绩，隐藏落地预演。</p></div><div class="flight-head-tools"><button id="change">返回折纸工坊</button></div></div><div class="mode-switch"><button type="button" id="mode-free">自由实验模式</button><button type="button" id="mode-comp" class="selected" aria-pressed="true">正式比赛模式</button></div><div class="comp-setup"><div class="comp-row"><span>比赛项目：</span><button type="button" id="comp-ev-distance" class="${compEvent === 'distance' ? 'selected' : ''}">距离赛（3 投最佳水平距离）</button><button type="button" id="comp-ev-duration" class="${compEvent === 'duration' ? 'selected' : ''}">滞空赛（3 投最佳滞空时间）</button></div><div class="comp-row"><span>参赛人数：</span>${([1, 2, 3, 4] as const).map(n => `<button type="button" data-comp-count="${n}" class="${compPlayerCount === n ? 'selected' : ''}">${n === 1 ? '单人挑战' : `${n} 人轮流赛`}</button>`).join('')}</div><div class="comp-row"><span>本场锁定环境：</span><span class="mono">${papers[paper].name} · ${gsm} gsm · 风场种子 #${compSeed}（${previewWinds.map((w, i) => `R${i + 1}:${w >= 0 ? '+' : ''}${w.toFixed(1)}`).join(' / ')} m/s）</span><button type="button" id="comp-reroll-seed">换一组风场</button></div><div class="comp-row"><span>正式赛个人最佳：</span><span class="mono">距离 ${pbDist ? `${pbDist.score.toFixed(1)} m (${pbDist.playerName})` : '暂无'} · 滞空 ${pbDur ? `${pbDur.score.toFixed(1)} s (${pbDur.playerName})` : '暂无'}</span></div><div class="comp-players">${playersHtml}</div><div class="actions"><span>开赛后将锁定机型与风场环境</span><button class="primary" id="comp-start">开始正式比赛 →</button></div></div></section>`,
+    );
+
+    document.querySelector<HTMLButtonElement>('#mode-free')!.onclick = () => {
+      flightMode = 'free';
+      flight = null;
+      render();
+    };
+    document.querySelector<HTMLButtonElement>('#change')!.onclick = () => {
+      stage = 'paper';
+      render();
+    };
+    document.querySelector<HTMLButtonElement>('#comp-ev-distance')!.onclick = () => {
+      compEvent = 'distance';
+      render();
+    };
+    document.querySelector<HTMLButtonElement>('#comp-ev-duration')!.onclick = () => {
+      compEvent = 'duration';
+      render();
+    };
+    document.querySelectorAll<HTMLButtonElement>('[data-comp-count]').forEach(
+      el =>
+        (el.onclick = () => {
+          compPlayerCount = Number(el.dataset.compCount) as 1 | 2 | 3 | 4;
+          render();
+        }),
+    );
+    document.querySelector<HTMLButtonElement>('#comp-reroll-seed')!.onclick = () => {
+      compSeed = Math.floor(100000 + Math.random() * 899999);
+      render();
+    };
+    document.querySelectorAll<HTMLInputElement>('[data-comp-name]').forEach(
+      el =>
+        (el.oninput = () => {
+          const idx = Number(el.dataset.compName);
+          compSetupPlayers[idx].name = el.value;
+        }),
+    );
+    document.querySelectorAll<HTMLSelectElement>('[data-comp-plane]').forEach(
+      el =>
+        (el.onchange = () => {
+          const idx = Number(el.dataset.compPlane);
+          compSetupPlayers[idx].plane = el.value as PlaneId;
+        }),
+    );
+    document.querySelector<HTMLButtonElement>('#comp-start')!.onclick = () => {
+      activeMatch = createCompetitionMatch({
+        event: compEvent,
+        paper: papers[paper].id,
+        gsm,
+        seed: compSeed,
+        players: compSetupPlayers.slice(0, compPlayerCount).map((p, i) => ({
+          id: `p${i + 1}`,
+          name: p.name.trim() || `选手 ${i + 1}`,
+          plane: p.plane,
+        })),
+      });
+      compLastRecord = null;
+      compThrowRecorded = false;
+      compThrowFlights = new Map();
+      compNewPb = false;
+      flight = null;
+      const firstPlane = planes[activeMatch.players[0].plane];
+      angle = firstPlane.recommendation.angle;
+      speed = firstPlane.recommendation.speed;
+      render();
+    };
+    return;
+  }
+
+  const aero = extract(replay(activeSheet, activePlaneDef.steps.length, activePlaneDef.steps), activeGsm);
   const metrics = aeroMetrics(aero);
-  let preview = simulate(aero, {angle, speed, wind});
-  const analysis = analyzeFlight(flight ?? preview, aero, {angle, speed, wind}, previousFlight);
-  const sharedMessage = sharedResult
-    ? `分享的成绩：${sharedResult.distance.toFixed(1)} m · ${sharedResult.duration.toFixed(1)} s · 最高 ${sharedResult.height.toFixed(1)} m。${preview.landed && matchesSharedResult(sharedResult, preview) ? '当前模型可复现。' : '当前模型结果不同，可能来自其他版本。'}`
+  let preview = simulate(aero, {angle, speed, wind: activeWind});
+  const analysis = analyzeFlight(flight ?? preview, aero, {angle, speed, wind: activeWind}, previousFlight);
+  const sharedMessage =
+    !isOfficialActive && sharedResult
+      ? `分享的成绩：${sharedResult.distance.toFixed(1)} m · ${sharedResult.duration.toFixed(1)} s · 最高 ${sharedResult.height.toFixed(1)} m。${preview.landed && matchesSharedResult(sharedResult, preview) ? '当前模型可复现。' : '当前模型结果不同，可能来自其他版本。'}`
+      : '';
+
+  const compBannerHtml = isOfficialActive
+    ? activeTurn
+      ? `<div class="comp-banner"><div><strong>第 ${activeTurn.round} / ${activeMatch!.rounds} 轮 · ${activeTurn.player.name}（${activePlaneDef.name}）</strong><br><span>${activeMatch!.event === 'distance' ? '距离赛' : '滞空赛'} · 锁定环境 ${activeSheet.name} ${activeGsm}g · 本轮风场 ${activeTurn.wind >= 0 ? '+' : ''}${activeTurn.wind.toFixed(1)} m/s · 种子 #${activeMatch!.seed}</span></div><button type="button" id="comp-abort">中途退赛</button></div>`
+      : `<div class="comp-banner"><div><strong>全部 ${activeMatch!.rounds} 轮投掷已完成！</strong><br><span>点击下方「查看冠军结算 →」进入排行榜与轨迹对比</span></div><button type="button" id="comp-abort">返回配置</button></div>`
     : '';
+
+  const liveStandingsHtml = isOfficialActive
+    ? `<div class="comp-board"><h3>当前实时排名</h3><table class="standings-table"><thead><tr><th>排名</th><th>选手</th><th>机型</th><th>已投</th><th>最佳有效成绩</th></tr></thead><tbody>${computeStandings(activeMatch!)
+        .map(
+          s =>
+            `<tr class="${s.rank === 1 && s.bestScore !== null ? 'leader' : ''}"><td class="mono">${s.bestScore === null ? '—' : s.tied ? `T${s.rank}` : `#${s.rank}`}</td><td>${s.player.name}</td><td>${planes[s.player.plane].name}</td><td class="mono">${s.throws.length} / ${activeMatch!.rounds}</td><td class="mono">${s.bestScore !== null ? `${s.bestScore.toFixed(2)} ${activeMatch!.event === 'distance' ? 'm' : 's'}` : '—'}</td></tr>`,
+        )
+        .join('')}</tbody></table></div>`
+    : '';
+
+  const nextTurnActionHtml =
+    isOfficialActive && compThrowRecorded && activeMatch
+      ? `<button class="primary" id="comp-next-turn">${activeMatch.status === 'finished' ? '查看冠军结算 →' : '下一位选手 / 下一投 →'}</button>`
+      : `<button class="primary" id="throw">${flight ? (isOfficialActive ? '飞行中…' : '再次投掷 →') : '投掷纸飞机 →'}</button>`;
+
   shell(
-    `<section><div class="section-head"><div><p class="eyebrow">03 / 试飞场</p><h2>给它一次飞行</h2><p>${papers[paper].name} · ${gsm} gsm · ${currentPlane().name}</p></div><div class="flight-head-tools"><button type="button" id="toggle-camera" class="${followCamera ? 'selected' : ''}" aria-pressed="${followCamera}">${followCamera ? '跟随相机：开' : '跟随相机：关'}</button><button type="button" id="toggle-forces" class="${showForces ? 'selected' : ''}" aria-pressed="${showForces}">${showForces ? '受力矢量：开' : '受力矢量：关'}</button><button type="button" id="toggle-polar" class="${showPolar ? 'selected' : ''}" aria-pressed="${showPolar}">${showPolar ? '极曲线图：开' : '极曲线图：关'}</button><button id="change">换纸重折</button></div></div>${legacyMessage ? `<p class="legacy-share" role="status">${legacyMessage}</p>` : ''}${sharedMessage ? `<p class="shared-result">${sharedMessage}</p>` : ''}<div class="canvas-wrap"><canvas id="flight" class="${!flight ? 'interactive-fold' : ''}" width="960" height="600" aria-label="飞行轨迹与试飞场"></canvas><div class="confetti" aria-hidden="true">${Array.from({length: 24}, (_, i) => `<i style="--x:${(i * 41) % 100}%;--delay:${(i % 6) * 0.08}s;--colour:${['var(--paper)', 'var(--mark-red)', 'var(--ink)'][i % 3]}"></i>`).join('')}</div></div><p class="ghost-note">在画布上向后下方拖动蓄力，松手即投掷；下方滑块可供精确实验微调。</p><div class="challenge"><span>选择挑战</span><button id="distance-challenge" class="${challenge === 'distance' ? 'selected' : ''}" aria-pressed="${challenge === 'distance'}">距离赛 · 88 m</button><button id="duration-challenge" class="${challenge === 'duration' ? 'selected' : ''}" aria-pressed="${challenge === 'duration'}">滞空赛 · 29.2 s</button><p id="challenge-result">${flight ? '挑战结算将在落地后显示' : '调整投掷，挑战历史成绩'}</p></div><div class="flight-status">${flight ? '试飞完成 · 调整参数，再挑战一次' : '准备起飞 · 拖动蓄力或调整滑块，查看虚线预演'} <span class="mono">个人最佳 ${bestLabel()}</span></div><div class="results" aria-live="polite"><div><small>飞行距离</small><strong>${flight ? flight.distance.toFixed(1) : '—'} <em>m</em></strong></div><div><small>滞空时间</small><strong>${flight ? flight.duration.toFixed(1) : '—'} <em>s</em></strong></div><div><small>最高高度</small><strong>${flight ? flight.height.toFixed(1) : '—'} <em>m</em></strong></div></div><div class="flight-diagnostic" id="flight-diagnostic"><div class="diag-head"><span class="mono diag-regime">${analysis.regimeLabel}</span>${analysis.comparison ? `<span class="mono diag-compare">${analysis.comparison.summary}</span>` : ''}</div><p id="diag-verdict">${analysis.verdict}</p></div><details class="physics aero-deep-panel"><summary>气动极曲线与轨迹三阶段深度分析</summary><div id="aero-deep-content">${renderAeroDeepHtml(flight ?? preview, aero, {angle, speed, wind})}</div></details><details class="physics"><summary>查看这架飞机的几何气动参数</summary><p>质量、重心、翼面焦点和转动惯量全部从折叠后的真实纸层多边形与纸张克重实时积分得出。</p><div class="physics-grid"><span>质量 <b class="mono">${(aero.mass * 1000).toFixed(2)} g</b></span><span>翼展 <b class="mono">${(aero.span * 100).toFixed(1)} cm</b></span><span>翼面积 <b class="mono">${(aero.wingArea * 10000).toFixed(0)} cm²</b></span><span>展弦比 <b class="mono">${aero.aspectRatio.toFixed(2)}</b></span><span>重心（距机头） <b class="mono">${((aero.cg.y - aero.noseY) * 100).toFixed(1)} cm</b></span><span>静稳定余量 <b class="mono">${(metrics.staticMargin * 100).toFixed(1)}%</b></span><span>翼载荷 <b class="mono">${metrics.wingLoading.toFixed(2)} N/m²</b></span><span>龙骨深度 <b class="mono">${(metrics.keelDepth * 100).toFixed(1)} cm</b></span><span>基准滑翔速 <b class="mono">${metrics.nominalGlideSpeed.toFixed(1)} m/s</b></span></div></details><div class="recommendation"><p><b>投掷起点：</b>${currentPlane().recommendation.note}</p><button id="apply-recommendation">采用建议角度与力度</button></div><div class="controls">${slider('angle', '投掷角度', 0, 75, angle, '°')}${slider('speed', '投掷力度', 6, 28, speed, ' m/s')}${slider('wind', '风速', -4, 4, wind, ' m/s')}</div><div class="wind-presets"><span>风场速设：</span>${[-3, 0, 3].map(w => `<button type="button" class="wind-preset ${wind === w ? 'selected' : ''}" data-wind="${w}">${w < 0 ? `逆风 ${w}` : w === 0 ? '无风 0' : `顺风 +${w}`} m/s</button>`).join('')}</div><div class="actions"><span>虚线为预演轨迹 · 正风速为顺风</span><button id="share">分享这次配置</button>${flight ? `<button id="pause-flight">${flightPaused ? '继续飞行' : '暂停'}</button><button id="slow-replay">慢动作回放 0.4×</button>` : ''}<button class="primary" id="throw">${flight ? '再次投掷 →' : '投掷纸飞机 →'}</button></div></section>`,
+    `<section><div class="section-head"><div><p class="eyebrow">02 / 飞行赛场${isOfficialActive ? ' · 正式比赛' : ''}</p><h2>${isOfficialActive ? (activeTurn ? `${activeTurn.player.name} 上场投掷` : '本场比赛投掷结束') : '给它一次飞行'}</h2><p>${activeSheet.name} · ${activeGsm} gsm · ${activePlaneDef.name}</p></div><div class="flight-head-tools"><button type="button" id="toggle-camera" class="${followCamera ? 'selected' : ''}" aria-pressed="${followCamera}">${followCamera ? '跟随相机：开' : '跟随相机：关'}</button>${!isOfficialActive ? '<button id="change">换纸重折</button>' : ''}</div></div>${!isOfficialActive ? `<div class="mode-switch"><button type="button" id="mode-free" class="selected" aria-pressed="true">自由实验模式</button><button type="button" id="mode-comp">正式比赛模式（1–4 人）</button></div>` : ''}${compBannerHtml}${!isOfficialActive && legacyMessage ? `<p class="legacy-share" role="status">${legacyMessage}</p>` : ''}${sharedMessage ? `<p class="shared-result">${sharedMessage}</p>` : ''}<div class="canvas-wrap"><canvas id="flight" class="${!flight ? 'interactive-fold' : ''}" width="960" height="600" aria-label="飞行轨迹与试飞场"></canvas><div class="confetti" aria-hidden="true">${Array.from({length: 24}, (_, i) => `<i style="--x:${(i * 41) % 100}%;--delay:${(i % 6) * 0.08}s;--colour:${['var(--paper)', 'var(--mark-red)', 'var(--ink)'][i % 3]}"></i>`).join('')}</div></div><p class="ghost-note">${isOfficialActive ? '正式比赛已隐藏落地预演虚线：在画布上向后下方拖动蓄力，松手即投掷。' : '在画布上向后下方拖动蓄力，松手即投掷；下方滑块可供精确实验微调。'}</p>${!isOfficialActive ? `<div class="challenge"><span>选择挑战</span><button id="distance-challenge" class="${challenge === 'distance' ? 'selected' : ''}" aria-pressed="${challenge === 'distance'}">距离赛 · 88 m</button><button id="duration-challenge" class="${challenge === 'duration' ? 'selected' : ''}" aria-pressed="${challenge === 'duration'}">滞空赛 · 29.2 s</button><p id="challenge-result">${flight ? '挑战结算将在落地后显示' : '调整投掷，挑战历史成绩'}</p></div>` : `<p id="challenge-result" class="ghost-note">${compLastRecord ? (compLastRecord.valid ? `本投有效成绩：${compLastRecord.score!.toFixed(2)} ${activeMatch!.event === 'distance' ? 'm' : 's'}` : `本投无效：${compLastRecord.invalidReason}`) : '请拖动蓄力或调整角度与力度后投掷'}</p>`}<div class="flight-status">${flight ? '试飞完成' : '准备起飞 · 拖动蓄力或调整滑块'} <span class="mono">${isOfficialActive ? (activeTurn ? `第 ${activeTurn.round}/${activeMatch!.rounds} 轮` : `全部 ${activeMatch!.rounds} 轮完成`) : `个人最佳 ${bestLabel()}`}</span></div><div class="results" aria-live="polite"><div><small>飞行距离</small><strong>${flight ? flight.distance.toFixed(1) : '—'} <em>m</em></strong></div><div><small>滞空时间</small><strong>${flight ? flight.duration.toFixed(1) : '—'} <em>s</em></strong></div><div><small>最高高度</small><strong>${flight ? flight.height.toFixed(1) : '—'} <em>m</em></strong></div></div>${liveStandingsHtml}<div class="controls">${slider('angle', '投掷角度', 0, 75, angle, '°')}${slider('speed', '投掷力度', 6, 28, speed, ' m/s')}${isOfficialActive ? `<label><span>本轮锁定风速 <b class="mono">${activeWind >= 0 ? '+' : ''}${activeWind.toFixed(1)} m/s</b></span><input id="wind" type="range" min="-4" max="4" step="0.5" value="${activeWind}" disabled></label>` : slider('wind', '风速', -4, 4, wind, ' m/s')}</div>${!isOfficialActive ? `<div class="wind-presets"><span>风场速设：</span>${[-3, 0, 3].map(w => `<button type="button" class="wind-preset ${wind === w ? 'selected' : ''}" data-wind="${w}">${w < 0 ? `逆风 ${w}` : w === 0 ? '无风 0' : `顺风 +${w}`} m/s</button>`).join('')}</div><div class="recommendation"><p><b>投掷起点：</b>${activePlaneDef.recommendation.note}</p><button id="apply-recommendation">采用建议角度与力度</button></div>` : ''}<div class="actions"><span>${isOfficialActive ? '正式赛同场环境已锁定' : '虚线为预演轨迹 · 正风速为顺风'}</span>${!isOfficialActive ? '<button id="share">分享这次配置</button>' : ''}${flight ? `<button id="pause-flight">${flightPaused ? '继续飞行' : '暂停'}</button><button id="slow-replay">慢动作回放 0.4×</button>` : ''}${nextTurnActionHtml}</div><details class="physics aero-deep-panel"><summary>高级分析：受力矢量、极曲线、轨迹诊断与几何参数</summary><div class="flight-head-tools" style="margin:10px 0"><button type="button" id="toggle-forces" class="${showForces ? 'selected' : ''}" aria-pressed="${showForces}">${showForces ? '受力矢量：开' : '受力矢量：关'}</button><button type="button" id="toggle-polar" class="${showPolar ? 'selected' : ''}" aria-pressed="${showPolar}">${showPolar ? '极曲线图：开' : '极曲线图：关'}</button></div><div class="flight-diagnostic" id="flight-diagnostic"><div class="diag-head"><span class="mono diag-regime">${analysis.regimeLabel}</span>${analysis.comparison ? `<span class="mono diag-compare">${analysis.comparison.summary}</span>` : ''}</div><p id="diag-verdict">${analysis.verdict}</p></div><div id="aero-deep-content">${renderAeroDeepHtml(flight ?? preview, aero, {angle, speed, wind: activeWind}, activePlaneId)}</div><div class="physics-grid" style="margin-top:12px"><span>质量 <b class="mono">${(aero.mass * 1000).toFixed(2)} g</b></span><span>翼展 <b class="mono">${(aero.span * 100).toFixed(1)} cm</b></span><span>翼面积 <b class="mono">${(aero.wingArea * 10000).toFixed(0)} cm²</b></span><span>展弦比 <b class="mono">${aero.aspectRatio.toFixed(2)}</b></span><span>重心（距机头） <b class="mono">${((aero.cg.y - aero.noseY) * 100).toFixed(1)} cm</b></span><span>静稳定余量 <b class="mono">${(metrics.staticMargin * 100).toFixed(1)}%</b></span><span>翼载荷 <b class="mono">${metrics.wingLoading.toFixed(2)} N/m²</b></span><span>龙骨深度 <b class="mono">${(metrics.keelDepth * 100).toFixed(1)} cm</b></span><span>基准滑翔速 <b class="mono">${metrics.nominalGlideSpeed.toFixed(1)} m/s</b></span></div></details></section>`,
   );
-  drawFlight(preview, flight, aero);
+  drawFlight(preview, flight, aero, activeWind, activeChallenge, isOfficialActive);
 
   const launchNow = (launchAngle: number, launchSpeed: number) => {
+    if (isOfficialActive && compThrowRecorded) return;
     cancelAnimationFrame(animation);
     sound.activate();
     angle = launchAngle;
@@ -454,8 +749,8 @@ function render() {
     chargeState = null;
     playbackRate = 1;
     if (flight) previousFlight = flight;
-    activeGhost = getGhost(challenge);
-    preview = simulate(aero, {angle, speed, wind});
+    activeGhost = isOfficialActive ? null : getGhost(challenge);
+    preview = simulate(aero, {angle, speed, wind: activeWind});
     flight = preview;
     playStart = performance.now();
     render();
@@ -473,7 +768,8 @@ function render() {
     };
   };
   flightCanvas.onpointerdown = e => {
-    // Allow drag-to-charge when ready (no flight) or after previous flight has finished
+    // Allow drag-to-charge when ready (no flight) or after previous flight has finished (in free mode)
+    if (isOfficialActive && (flight !== null || compThrowRecorded)) return;
     const finished = !flight || reduced.matches || currentElapsed(flight) >= flight.duration;
     if (!finished || chargePointerId !== null) return;
     const pt = toFlightCanvasPt(e);
@@ -485,15 +781,14 @@ function render() {
       pausedElapsed = 0;
     }
     chargePointerId = e.pointerId;
-    chargeAnchor = flightLaunchAnchor(preview, null, getGhost(challenge), false);
-    // If pointer starts away from the stand, use the pointer press point as the relative anchor
+    chargeAnchor = flightLaunchAnchor(preview, null, isOfficialActive ? null : getGhost(challenge), isOfficialActive);
     const anchor = Math.hypot(pt.x - chargeAnchor.x, pt.y - chargeAnchor.y) <= 90 ? chargeAnchor : pt;
     chargeAnchor = anchor;
     const res = mapDragToThrow(chargeAnchor, pt);
     chargeState = {anchor: chargeAnchor, pointer: pt, result: res};
     flightCanvas.classList.add('dragging');
     flightCanvas.setPointerCapture?.(e.pointerId);
-    drawFlight(preview, null, aero);
+    drawFlight(preview, null, aero, activeWind, activeChallenge, isOfficialActive);
   };
   flightCanvas.onpointermove = e => {
     if (chargePointerId !== e.pointerId) return;
@@ -503,7 +798,7 @@ function render() {
     if (res.ready) {
       angle = res.angle;
       speed = res.speed;
-      preview = simulate(aero, {angle, speed, wind});
+      preview = simulate(aero, {angle, speed, wind: activeWind});
       const angleInput = document.querySelector<HTMLInputElement>('#angle');
       const speedInput = document.querySelector<HTMLInputElement>('#speed');
       if (angleInput) {
@@ -517,7 +812,7 @@ function render() {
         if (b) b.textContent = `${speed} m/s`;
       }
     }
-    drawFlight(preview, null, aero);
+    drawFlight(preview, null, aero, activeWind, activeChallenge, isOfficialActive);
   };
   const endCharge = (e: PointerEvent, cancelled: boolean) => {
     if (chargePointerId !== e.pointerId) return;
@@ -529,11 +824,53 @@ function render() {
     if (!cancelled && res.ready) {
       launchNow(res.angle, res.speed);
     } else {
-      drawFlight(preview, flight, aero);
+      drawFlight(preview, flight, aero, activeWind, activeChallenge, isOfficialActive);
     }
   };
   flightCanvas.onpointerup = e => endCharge(e, false);
   flightCanvas.onpointercancel = e => endCharge(e, true);
+
+  const modeCompBtn = document.querySelector<HTMLButtonElement>('#mode-comp');
+  if (modeCompBtn) {
+    modeCompBtn.onclick = () => {
+      sound.wind(0);
+      flightMode = 'competition';
+      compSetupPlayers[0].plane = plane;
+      flight = null;
+      render();
+    };
+  }
+  const compAbortBtn = document.querySelector<HTMLButtonElement>('#comp-abort');
+  if (compAbortBtn) {
+    compAbortBtn.onclick = () => {
+      sound.wind(0);
+      if (activeMatch) activeMatch = abortCompetitionMatch(activeMatch);
+      flight = null;
+      compLastRecord = null;
+      compThrowRecorded = false;
+      render();
+    };
+  }
+  const compNextTurnBtn = document.querySelector<HTMLButtonElement>('#comp-next-turn');
+  if (compNextTurnBtn) {
+    compNextTurnBtn.onclick = () => {
+      sound.wind(0);
+      if (!activeMatch) return;
+      flight = null;
+      compLastRecord = null;
+      compThrowRecorded = false;
+      if (activeMatch.status === 'finished') {
+        stage = 'settlement';
+      } else {
+        const nextT = currentTurn(activeMatch);
+        if (nextT) {
+          angle = planes[nextT.player.plane].recommendation.angle;
+          speed = planes[nextT.player.plane].recommendation.speed;
+        }
+      }
+      render();
+    };
+  }
 
   const cameraBtn = document.querySelector<HTMLButtonElement>('#toggle-camera')!;
   cameraBtn.onclick = () => {
@@ -542,29 +879,34 @@ function render() {
     cameraBtn.setAttribute('aria-pressed', String(followCamera));
     cameraBtn.textContent = followCamera ? '跟随相机：开' : '跟随相机：关';
     cancelAnimationFrame(animation);
-    drawFlight(preview, flight, aero);
+    drawFlight(preview, flight, aero, activeWind, activeChallenge, isOfficialActive);
   };
-  const forcesBtn = document.querySelector<HTMLButtonElement>('#toggle-forces')!;
-  forcesBtn.onclick = () => {
-    showForces = !showForces;
-    forcesBtn.classList.toggle('selected', showForces);
-    forcesBtn.setAttribute('aria-pressed', String(showForces));
-    forcesBtn.textContent = showForces ? '受力矢量：开' : '受力矢量：关';
-    cancelAnimationFrame(animation);
-    drawFlight(preview, flight, aero);
-  };
-  const polarBtn = document.querySelector<HTMLButtonElement>('#toggle-polar')!;
-  polarBtn.onclick = () => {
-    showPolar = !showPolar;
-    polarBtn.classList.toggle('selected', showPolar);
-    polarBtn.setAttribute('aria-pressed', String(showPolar));
-    polarBtn.textContent = showPolar ? '极曲线图：开' : '极曲线图：关';
-    cancelAnimationFrame(animation);
-    drawFlight(preview, flight, aero);
-  };
+  const forcesBtn = document.querySelector<HTMLButtonElement>('#toggle-forces');
+  if (forcesBtn) {
+    forcesBtn.onclick = () => {
+      showForces = !showForces;
+      forcesBtn.classList.toggle('selected', showForces);
+      forcesBtn.setAttribute('aria-pressed', String(showForces));
+      forcesBtn.textContent = showForces ? '受力矢量：开' : '受力矢量：关';
+      cancelAnimationFrame(animation);
+      drawFlight(preview, flight, aero, activeWind, activeChallenge, isOfficialActive);
+    };
+  }
+  const polarBtn = document.querySelector<HTMLButtonElement>('#toggle-polar');
+  if (polarBtn) {
+    polarBtn.onclick = () => {
+      showPolar = !showPolar;
+      polarBtn.classList.toggle('selected', showPolar);
+      polarBtn.setAttribute('aria-pressed', String(showPolar));
+      polarBtn.textContent = showPolar ? '极曲线图：开' : '极曲线图：关';
+      cancelAnimationFrame(animation);
+      drawFlight(preview, flight, aero, activeWind, activeChallenge, isOfficialActive);
+    };
+  }
   document.querySelectorAll<HTMLButtonElement>('[data-wind]').forEach(
     el =>
       (el.onclick = () => {
+        if (isOfficialActive) return;
         wind = Number(el.dataset.wind);
         sharedResult = undefined;
         legacyMessage = '';
@@ -574,35 +916,44 @@ function render() {
         render();
       }),
   );
-  document.querySelector<HTMLButtonElement>('#apply-recommendation')!.onclick = () => {
-    angle = currentPlane().recommendation.angle;
-    speed = currentPlane().recommendation.speed;
-    sharedResult = undefined;
-    legacyMessage = '';
-    flight = null;
-    activeGhost = null;
-    render();
-    document.querySelector<HTMLButtonElement>('#apply-recommendation')?.focus();
-  };
-  for (const mode of ['distance', 'duration'] as const) {
-    document.querySelector<HTMLButtonElement>('#' + mode + '-challenge')!.onclick = () => {
-      challenge = mode;
+  const applyRecBtn = document.querySelector<HTMLButtonElement>('#apply-recommendation');
+  if (applyRecBtn) {
+    applyRecBtn.onclick = () => {
+      angle = activePlaneDef.recommendation.angle;
+      speed = activePlaneDef.recommendation.speed;
+      sharedResult = undefined;
+      legacyMessage = '';
       flight = null;
       activeGhost = null;
-      sound.wind(0);
       render();
+      document.querySelector<HTMLButtonElement>('#apply-recommendation')?.focus();
     };
   }
+  for (const mode of ['distance', 'duration'] as const) {
+    const modeBtn = document.querySelector<HTMLButtonElement>('#' + mode + '-challenge');
+    if (modeBtn) {
+      modeBtn.onclick = () => {
+        challenge = mode;
+        flight = null;
+        activeGhost = null;
+        sound.wind(0);
+        render();
+      };
+    }
+  }
   for (const id of ['angle', 'speed', 'wind']) {
-    const el = document.querySelector<HTMLInputElement>('#' + id)!;
+    const el = document.querySelector<HTMLInputElement>('#' + id);
+    if (!el || el.disabled) continue;
     el.oninput = () => {
       if (id === 'angle') angle = +el.value;
       if (id === 'speed') speed = +el.value;
       if (id === 'wind') wind = +el.value;
       sharedResult = undefined;
       legacyMessage = '';
-      flight = null;
-      activeGhost = null;
+      if (!isOfficialActive) {
+        flight = null;
+        activeGhost = null;
+      }
       sound.wind(0);
       const value = el.closest('label')?.querySelector('b');
       if (value) value.textContent = el.value + (id === 'angle' ? '°' : ' m/s');
@@ -610,30 +961,37 @@ function render() {
       document.querySelector('.legacy-share')?.remove();
       document.querySelector('#flight')?.parentElement?.classList.remove('celebrate');
       const status = document.querySelector('.flight-status');
-      if (status) status.innerHTML = '准备起飞 · 调整参数，查看虚线预演 <span class="mono">个人最佳 ' + bestLabel() + '</span>';
+      if (status && !isOfficialActive) {
+        status.innerHTML = '准备起飞 · 拖动蓄力或调整滑块，查看虚线预演 <span class="mono">个人最佳 ' + bestLabel() + '</span>';
+      }
       const result = document.querySelector('#challenge-result');
-      if (result) result.textContent = '调整投掷，挑战历史成绩';
-      document.querySelectorAll('.results strong').forEach((node, i) => {
-        node.innerHTML = '— <em>' + ['m', 's', 'm'][i] + '</em>';
-      });
+      if (result && !isOfficialActive) result.textContent = '调整投掷，挑战历史成绩';
+      if (!isOfficialActive) {
+        document.querySelectorAll('.results strong').forEach((node, i) => {
+          node.innerHTML = '— <em>' + ['m', 's', 'm'][i] + '</em>';
+        });
+      }
       const launch = document.querySelector<HTMLButtonElement>('#throw');
-      if (launch) launch.textContent = '投掷纸飞机 →';
+      if (launch && !isOfficialActive) launch.textContent = '投掷纸飞机 →';
       const share = document.querySelector<HTMLButtonElement>('#share');
       if (share) share.textContent = '分享这次配置';
-      preview = simulate(aero, {angle, speed, wind});
-      const liveAnalysis = analyzeFlight(preview, aero, {angle, speed, wind}, previousFlight);
+      preview = simulate(aero, {angle, speed, wind: activeWind});
+      const liveAnalysis = analyzeFlight(preview, aero, {angle, speed, wind: activeWind}, previousFlight);
       const diagRegime = document.querySelector('.diag-regime');
       if (diagRegime) diagRegime.textContent = liveAnalysis.regimeLabel;
       const diagVerdict = document.querySelector('#diag-verdict');
       if (diagVerdict) diagVerdict.textContent = liveAnalysis.verdict;
       const deepContent = document.querySelector('#aero-deep-content');
-      if (deepContent) deepContent.innerHTML = renderAeroDeepHtml(preview, aero, {angle, speed, wind});
-      drawFlight(preview, null, aero);
+      if (deepContent) deepContent.innerHTML = renderAeroDeepHtml(preview, aero, {angle, speed, wind: activeWind}, activePlaneId);
+      drawFlight(preview, isOfficialActive ? flight : null, aero, activeWind, activeChallenge, isOfficialActive);
     };
   }
-  document.querySelector<HTMLButtonElement>('#throw')!.onclick = () => {
-    launchNow(angle, speed);
-  };
+  const throwBtn = document.querySelector<HTMLButtonElement>('#throw');
+  if (throwBtn) {
+    throwBtn.onclick = () => {
+      launchNow(angle, speed);
+    };
+  }
   const pauseBtn = document.querySelector<HTMLButtonElement>('#pause-flight');
   if (pauseBtn) {
     pauseBtn.onclick = () => {
@@ -650,7 +1008,7 @@ function render() {
         playStart = performance.now() - (pausedElapsed / playbackRate) * 1000;
       }
       pauseBtn.textContent = flightPaused ? '继续飞行' : '暂停';
-      drawFlight(preview, flight, aero);
+      drawFlight(preview, flight, aero, activeWind, activeChallenge, isOfficialActive);
     };
   }
   const slowBtn = document.querySelector<HTMLButtonElement>('#slow-replay');
@@ -667,40 +1025,45 @@ function render() {
       render();
     };
   }
-  document.querySelector<HTMLButtonElement>('#share')!.onclick = () => {
-    const score = resultForShare(
-      flight,
-      !!flight && (reduced.matches || (performance.now() - playStart) * playbackRate >= flight.duration * 1000),
-      sharedResult,
-    );
-    const hash = encodeFlight({
-      version: 1,
-      plane,
-      paper: papers[paper].id,
-      gsm: gsm as 70 | 80 | 100,
-      angle,
-      speed,
-      wind,
-      step: currentPlane().steps.length,
-      challenge,
-      ...(score ? {result: score} : {}),
-    });
-    history.replaceState(null, '', hash);
-    const button = document.querySelector<HTMLButtonElement>('#share')!;
-    (navigator.clipboard?.writeText(location.href) ?? Promise.reject()).then(
-      () => (button.textContent = '链接已复制'),
-      () => (button.textContent = '请复制地址栏链接'),
-    );
-  };
-  document.querySelector<HTMLButtonElement>('#change')!.onclick = () => {
-    sound.wind(0);
-    sharedResult = undefined;
-    legacyMessage = '';
-    flight = null;
-    previousFlight = null;
-    stage = 'paper';
-    render();
-  };
+  const shareBtn = document.querySelector<HTMLButtonElement>('#share');
+  if (shareBtn) {
+    shareBtn.onclick = () => {
+      const score = resultForShare(
+        flight,
+        !!flight && (reduced.matches || currentElapsed(flight) >= flight.duration),
+        sharedResult,
+      );
+      const hash = encodeFlight({
+        version: 1,
+        plane,
+        paper: papers[paper].id,
+        gsm: gsm as 70 | 80 | 100,
+        angle,
+        speed,
+        wind,
+        step: currentPlane().steps.length,
+        challenge,
+        ...(score ? {result: score} : {}),
+      });
+      history.replaceState(null, '', hash);
+      (navigator.clipboard?.writeText(location.href) ?? Promise.reject()).then(
+        () => (shareBtn.textContent = '链接已复制'),
+        () => (shareBtn.textContent = '请复制地址栏链接'),
+      );
+    };
+  }
+  const changeBtn = document.querySelector<HTMLButtonElement>('#change');
+  if (changeBtn) {
+    changeBtn.onclick = () => {
+      sound.wind(0);
+      sharedResult = undefined;
+      legacyMessage = '';
+      flight = null;
+      previousFlight = null;
+      stage = 'paper';
+      render();
+    };
+  }
 }
 
 function slider(id: string, label: string, min: number, max: number, value: number, unit: string) {
@@ -792,11 +1155,16 @@ const DESIGNER_TRIM_NOTES: Record<PlaneId, {source: string; trim: string}> = {
   },
 };
 
-function renderAeroDeepHtml(targetFlight: Flight, aero: Aero, launch: Throw): string {
+function renderAeroDeepHtml(
+  targetFlight: Flight,
+  aero: Aero,
+  launch: Throw,
+  planeId: PlaneId = plane,
+): string {
   const polar = computeAeroPolar(aero, launch.wind);
   const phases = analyzeTrajectoryPhases(targetFlight, aero, launch);
   const sweep = sweepLaunchAngles(aero, launch.speed, launch.wind);
-  const trimNote = DESIGNER_TRIM_NOTES[plane];
+  const trimNote = DESIGNER_TRIM_NOTES[planeId];
 
   const phaseCards = phases.phases
     .map(
@@ -813,47 +1181,74 @@ function currentElapsed(actual: Flight): number {
   return Math.min(actual.duration, ((performance.now() - playStart) / 1000) * playbackRate);
 }
 
-function drawFlight(preview: Flight, actual: Flight | null, aero?: Aero) {
+function drawFlight(
+  preview: Flight,
+  actual: Flight | null,
+  aero?: Aero,
+  activeWind = wind,
+  activeChallenge: Challenge = challenge,
+  hidePreview = false,
+) {
   const canvas = document.querySelector<HTMLCanvasElement>('#flight');
   if (!canvas) return;
-  const ghost = actual ? activeGhost : getGhost(challenge);
+  const ghost = hidePreview ? null : actual ? activeGhost : getGhost(activeChallenge);
   const elapsed = actual ? currentElapsed(actual) : 0;
   renderFlightCanvas(
     canvas,
     preview,
     actual,
     ghost,
-    challenge,
+    activeChallenge,
     elapsed,
-    {angle, speed, wind},
+    {angle, speed, wind: activeWind},
     aero,
     showForces,
     showPolar,
-    {followCamera, chargeState, paused: flightPaused},
+    {followCamera, chargeState, paused: flightPaused, hidePreview},
   );
   if (actual) {
-    updateFlightFeedback(actual, elapsed, aero);
+    updateFlightFeedback(actual, elapsed, activeWind, hidePreview);
     if (elapsed < actual.duration && !flightPaused) {
-      animation = requestAnimationFrame(() => drawFlight(preview, actual, aero));
+      animation = requestAnimationFrame(() =>
+        drawFlight(preview, actual, aero, activeWind, activeChallenge, hidePreview),
+      );
     }
   }
 }
 
 render();
 
-function updateFlightFeedback(actual: Flight, elapsed: number, _aero?: Aero) {
+function updateFlightFeedback(actual: Flight, elapsed: number, activeWind = wind, isOfficial = false) {
   const frame = playback(actual, elapsed);
   const done = frame.finished;
-  sound.wind(done ? 0 : airSpeedAt(actual.samples, elapsed, wind));
+  sound.wind(done ? 0 : airSpeedAt(actual.samples, elapsed, activeWind));
   if (done && actual.landed && !landingSoundPlayed) {
     sound.land();
     landingSoundPlayed = true;
   }
-  if (done && actual.landed && !celebrated && challengeResult(challenge, actual).beaten) {
+
+  // Commit official competition throw once upon landing
+  if (done && isOfficial && activeMatch && activeMatch.status === 'in-progress' && !compThrowRecorded) {
+    const turn = currentTurn(activeMatch);
+    if (turn) {
+      const committed = recordCompetitionThrow(activeMatch, {angle, speed, wind: turn.wind}, actual);
+      activeMatch = committed.match;
+      compLastRecord = committed.record;
+      compThrowRecorded = true;
+      compThrowFlights.set(`${turn.player.id}-${turn.round}`, actual);
+      if (activeMatch.status === 'finished') {
+        compNewPb = saveCompetitionPbIfBetter(activeMatch);
+      }
+      render();
+      return;
+    }
+  }
+
+  if (!isOfficial && done && actual.landed && !celebrated && challengeResult(challenge, actual).beaten) {
     celebrated = true;
     if (!reduced.matches) document.querySelector('#flight')?.parentElement?.classList.add('celebrate');
   }
-  if (done && actual.landed) {
+  if (!isOfficial && done && actual.landed) {
     const key = ghostStorageKey(plane, challenge);
     const old = getGhost(challenge);
     const updated = bestFlight(challenge, old, actual);
@@ -865,7 +1260,7 @@ function updateFlightFeedback(actual: Flight, elapsed: number, _aero?: Aero) {
     }
   }
   const result = document.querySelector('#challenge-result');
-  if (result) {
+  if (result && !isOfficial) {
     const c = challengeResult(challenge, actual);
     result.textContent = done
       ? !actual.landed
@@ -876,7 +1271,7 @@ function updateFlightFeedback(actual: Flight, elapsed: number, _aero?: Aero) {
       : '飞行中 · 落地后结算挑战';
   }
   const status = document.querySelector('.flight-status');
-  if (status) {
+  if (status && !isOfficial) {
     status.innerHTML =
       (done
         ? actual.landed
@@ -895,14 +1290,17 @@ function updateFlightFeedback(actual: Flight, elapsed: number, _aero?: Aero) {
   });
   const launch = document.querySelector<HTMLButtonElement>('#throw');
   if (launch) {
-    launch.disabled = !done;
-    launch.textContent = done ? '再次投掷 →' : '飞行中…';
+    launch.disabled = !done || (isOfficial && compThrowRecorded);
+    launch.textContent = done ? (isOfficial ? '已计分' : '再次投掷 →') : '飞行中…';
   }
   const pauseBtn = document.querySelector<HTMLButtonElement>('#pause-flight');
   if (pauseBtn) pauseBtn.disabled = done;
   const slowBtn = document.querySelector<HTMLButtonElement>('#slow-replay');
   if (slowBtn) slowBtn.disabled = !done;
-  document.querySelectorAll<HTMLInputElement>('.controls input').forEach(el => (el.disabled = !done));
+  document.querySelectorAll<HTMLInputElement>('.controls input').forEach(el => {
+    if (el.id === 'wind' && isOfficial) el.disabled = true;
+    else el.disabled = !done || (isOfficial && compThrowRecorded);
+  });
   document.querySelectorAll<HTMLButtonElement>('.challenge button, .recommendation button, .wind-presets button, #share').forEach(
     el => (el.disabled = !done),
   );
