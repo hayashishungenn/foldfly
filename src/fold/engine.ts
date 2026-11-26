@@ -5,7 +5,7 @@ import {deploySlopedWings} from './deploy';
 // Increment when the same fold program can produce different geometry.
 export const FOLD_ENGINE_VERSION=5;
 export type Sheet = {width:number;height:number};
-export type FoldState = {layers:Polygon[];layerGroups?:number[];step:number;flightLayers?:Polygon[];wingLayers?:Polygon[];bodySideLayers?:Polygon[];bodyLayerIndices?:number[];bodyAxisX?:number;massFaces3d?:Point3[][]};
+export type FoldState = {layers:Polygon[];layerGroups?:number[];step:number;flightLayers?:Polygon[];wingLayers?:Polygon[];bodySideLayers?:Polygon[];bodyLayerIndices?:number[];bodyAxisX?:number;massFaces3d?:Point3[][];viewFaces3d?:Point3[][]};
 export function line(step:FoldBoundary & {diagonal?:boolean},s:Sheet):[Point,Point] {
  const point=(p:FoldPoint):Point=>{
   if(Array.isArray(p))return {x:p[0]*s.width,y:step.diagonal && p[1]>0 ? s.width/2 : p[1]*s.height};
@@ -185,5 +185,29 @@ export function replay(s:Sheet,count:number,program:readonly FoldStep[]=dart):Fo
    }
   }
  }
- return {...state,flightLayers,wingLayers,bodySideLayers,bodyLayerIndices,bodyAxisX:center};
+  return {
+    ...state,
+    flightLayers,
+    wingLayers,
+    bodySideLayers,
+    bodyLayerIndices,
+    bodyAxisX: center,
+    // v5 视图用 3D 面片(米制):双翼平展在 z=0,机身左右半幅各自竖直下垂
+    // (中条按中心线拆成两半,面积才守恒)。仅供渲染,不参与气动提取。
+    viewFaces3d: (() => {
+      const bodySet = new Set(bodyLayerIndices);
+      const verticalFace = (poly: Polygon): Point3[][] => {
+        const left = clip(poly, {x: center, y: 0}, {x: center, y: 1}, -1);
+        const right = clip(poly, {x: center, y: 0}, {x: center, y: 1}, 1);
+        const map = (half: Polygon): Point3[] => half.map(v => ({x: center, y: v.y, z: -(Math.abs(v.x - center))}));
+        const faces: Point3[][] = [];
+        if (left.length >= 3 && area(left) > 1e-12) faces.push(map(left));
+        if (right.length >= 3 && area(right) > 1e-12) faces.push(map(right));
+        return faces;
+      };
+      return flightLayers.flatMap((poly, i) =>
+        bodySet.has(i) ? verticalFace(poly) : [poly.map(v => ({x: v.x, y: v.y, z: 0}))],
+      );
+    })(),
+  };
 }
