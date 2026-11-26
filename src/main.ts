@@ -159,6 +159,8 @@ let careerState: CareerState = createCareerState();
 let careerActive: CareerChallenge | null = null;
 let careerNeedsReset = false;
 let careerEvaluated = false;
+/** 治理 1.7:存档写入失败必须可见,不能让玩家误以为进度已持久化。 */
+let careerSaveFailed = false;
 
 // Official local competition state (independent from free experiment mode)
 let flightMode: 'free' | 'competition' = 'free';
@@ -502,7 +504,7 @@ function render() {
       })
       .join('');
     shell(
-      `<section><div class="section-head"><div><p class="eyebrow">单人生涯</p><h2>从童年回忆到纪录殿堂</h2><p>按顺序挑战 ${careerChallenges.length} 个关卡;每关锁定纸张与风况,精准赛开放角度与力度供你调整。${progress.done > 0 ? `已完成 ${progress.done}/${progress.total}。` : ''}</p></div><div class="flight-head-tools"><button id="career-back">← 返回选纸</button>${progress.done > 0 ? '<button id="career-reset">重置生涯</button>' : ''}</div></div>${careerNeedsReset ? '<p role="status">检测到不兼容的旧版生涯存档,已完成进度不可读;请重置后重新开始。</p>' : ''}<div class="career-grid">${cards}</div>${renderRecordsWall()}</section>`,
+      `<section><div class="section-head"><div><p class="eyebrow">单人生涯</p><h2>从童年回忆到纪录殿堂</h2><p>按顺序挑战 ${careerChallenges.length} 个关卡;每关锁定纸张与风况,精准赛开放角度与力度供你调整。${progress.done > 0 ? `已完成 ${progress.done}/${progress.total}。` : ''}</p></div><div class="flight-head-tools"><button id="career-back">← 返回选纸</button>${progress.done > 0 ? '<button id="career-reset">重置生涯</button>' : ''}</div></div>${careerNeedsReset ? '<p role="status">检测到不兼容的旧版生涯存档,已完成进度不可读;请重置后重新开始。</p>' : ''}${careerSaveFailed ? '<p role="alert">⚠ 本次进度未能写入本地存储(隐私模式或空间不足)——当前会话内进度仍有效,但刷新后将丢失。</p>' : ''}<div class="career-grid">${cards}</div>${renderRecordsWall()}</section>`,
     );
     document.querySelector<HTMLButtonElement>('#career-back')!.onclick = () => {
       stage = 'paper';
@@ -962,12 +964,15 @@ function render() {
       : null;
   // 生涯挑战:锁定机型/纸张/风况,精准赛开放角度与力度
   const career = careerActive && !isOfficialActive ? careerActive : null;
+  // 治理 1.5(C-03):成绩提交后、用户未进入下一位之前,赛场必须继续以
+  // 上一投的飞机/风况/参数展示上一投的轨迹,而不是已指向下一位的 currentTurn。
+  const reviewing = isOfficialActive && compThrowRecorded ? compLastRecord : null;
   const activeSheet = career ? papers.find(p => p.id === career.paper) ?? papers[paper] : isOfficialActive ? (papers.find(p => p.id === activeMatch!.paper) ?? papers[paper]) : papers[paper];
   const activeGsm = career ? career.gsm : isOfficialActive ? activeMatch!.gsm : gsm;
   const activeGrade: PaperGradeId = career ? career.grade ?? 'copy' : isOfficialActive ? activeMatch!.grade ?? 'copy' : grade;
-  const activePlaneId: PlaneId = career ? career.plane : activeTurn ? activeTurn.player.plane : lastCompPlayer ? lastCompPlayer.plane : plane;
-  const activeWind = career ? career.wind : activeTurn ? activeTurn.wind : compLastRecord ? compLastRecord.launch.wind : wind;
-  const activeCross = activeTurn ? activeTurn.crosswind : compLastRecord ? compLastRecord.launch.crosswind ?? 0 : crosswind;
+  const activePlaneId: PlaneId = career ? career.plane : reviewing ? reviewing.plane : activeTurn ? activeTurn.player.plane : lastCompPlayer ? lastCompPlayer.plane : plane;
+  const activeWind = career ? career.wind : reviewing ? reviewing.launch.wind : activeTurn ? activeTurn.wind : compLastRecord ? compLastRecord.launch.wind : wind;
+  const activeCross = career ? career.crosswind : reviewing ? reviewing.launch.crosswind ?? 0 : activeTurn ? activeTurn.crosswind : compLastRecord ? compLastRecord.launch.crosswind ?? 0 : crosswind;
   // 闭包(投掷/滑块/拖动)在渲染之后运行,必须动态读取模块状态而非渲染时的 const
   const currentCross = () => (career ? career.crosswind : isOfficialActive ? activeCross : crosswind);
   const currentWind = () => (career ? career.wind : isOfficialActive ? activeWind : wind);
@@ -1116,7 +1121,9 @@ function render() {
       : '';
 
   const compBannerHtml = isOfficialActive
-    ? activeTurn
+    ? reviewing
+      ? `<div class="comp-banner"><div><strong>上一投结果 · 第 ${reviewing.round} 轮 · ${escapeHtml(reviewing.plane ? planes[reviewing.plane].name : '')}</strong><br><span>${reviewing.valid ? `有效成绩 ${reviewing.score!.toFixed(2)} ${activeMatch!.event === 'duration' ? 's' : 'm'}` : `无效:${reviewing.invalidReason}`} · 风场 ${reviewing.launch.wind >= 0 ? '+' : ''}${reviewing.launch.wind.toFixed(1)} / 侧风 ${reviewing.launch.crosswind ?? 0 >= 0 ? '+' : ''}${(reviewing.launch.crosswind ?? 0).toFixed(1)} m/s · 回放与诊断均使用该投掷的配置</span></div><button type="button" id="comp-next-turn">${activeMatch!.status === 'finished' ? '查看冠军结算 →' : '下一位选手 →'}</button></div>`
+      : activeTurn
       ? `<div class="comp-banner"><div><strong>第 ${activeTurn.round} / ${activeMatch!.rounds} 轮 · ${escapeHtml(activeTurn.player.name)}（${activePlaneDef.name}）</strong><br><span>${activeMatch!.event === 'distance' ? '距离赛' : activeMatch!.event === 'accuracy' ? `精准赛 · 靶线 ${activeMatch!.accuracyTarget?.toFixed(1) ?? '?'} m` : '滞空赛'} · 锁定环境 ${activeSheet.name} ${activeGsm}g ${paperGrade(activeGrade).name} · 本轮风场 ${activeTurn.wind >= 0 ? '+' : ''}${activeTurn.wind.toFixed(1)} / 侧风 ${activeTurn.crosswind >= 0 ? '+' : ''}${activeTurn.crosswind.toFixed(1)} m/s · 种子 #${activeMatch!.seed}</span></div><button type="button" id="comp-abort">中途退赛</button></div>`
       : `<div class="comp-banner"><div><strong>全部 ${activeMatch!.rounds} 轮投掷已完成！</strong><br><span>点击下方「查看冠军结算 →」进入排行榜与轨迹对比</span></div><button type="button" id="comp-abort">返回配置</button></div>`
     : '';
@@ -1832,7 +1839,10 @@ function updateFlightFeedback(actual: Flight, elapsed: number, activeWind = wind
       careerState = completeChallenge(careerState, c, score);
       try {
         localStorage.setItem(careerStorageKey, encodeCareer(careerState));
-      } catch {}
+        careerSaveFailed = false;
+      } catch {
+        careerSaveFailed = true;
+      }
       if (!reduced.matches) document.querySelector('#flight')?.parentElement?.classList.add('celebrate');
       if (resultEl) resultEl.textContent = `关卡完成!本次 ${score.toFixed(2)}${unit}${c.event === 'accuracy' ? '(距靶)' : ''},目标 ${goal} · 已写入生涯进度,回生涯页继续下一关`;
     } else if (resultEl) {
