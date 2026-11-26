@@ -8,9 +8,27 @@ import {
   type AeroPolar,
   type TrajectoryBreakdown,
 } from '../aero/polar';
+import {computeFlightCamera} from '../game/camera';
 import type {Challenge} from '../game/challenge';
-import {flightBounds} from '../game/flight-view';
 import {playback} from '../game/playback';
+import type {CanvasPoint, DragThrowResult} from '../game/throw-control';
+
+export type FlightRenderOptions = {
+  hidePreview?: boolean;
+  followCamera?: boolean;
+  chargeState?: {anchor: CanvasPoint; pointer: CanvasPoint; result: DragThrowResult} | null;
+  paused?: boolean;
+};
+
+export function flightLaunchAnchor(
+  preview: Flight,
+  actual: Flight | null,
+  ghost: Flight | null,
+  hidePreview = false,
+): CanvasPoint {
+  const cam = computeFlightCamera(preview, actual, ghost, 0, {followCamera: false, hidePreview});
+  return {x: cam.mapX(0), y: cam.mapY(1.5)};
+}
 
 export function renderFlightCanvas(
   canvas: HTMLCanvasElement,
@@ -23,10 +41,14 @@ export function renderFlightCanvas(
   aero?: Aero,
   showForces = true,
   showPolar = true,
+  options: FlightRenderOptions = {},
 ): void {
   const c = canvas.getContext('2d')!;
-  const {minX, maxX, maxY, mapX} = flightBounds([preview, actual, ghost]);
-  const sy = 460 / maxY;
+  const {hidePreview = false, followCamera = true, chargeState = null, paused = false} = options;
+  const {minX, maxX, maxY, sy, mapX, isFollowing} = computeFlightCamera(preview, actual, ghost, elapsed, {
+    followCamera,
+    hidePreview,
+  });
 
   // Sky vertical gradient: --sky (#8FC7E8) at top to --sky-hi (#DCEFF9) above horizon
   const skyGrad = c.createLinearGradient(0, 0, 0, 520);
@@ -35,17 +57,19 @@ export function renderFlightCanvas(
   c.fillStyle = skyGrad;
   c.fillRect(0, 0, 960, 520);
 
-  // Minimalist monochrome clouds (--paper #FAF6EE)
+  // Minimalist monochrome clouds (--paper #FAF6EE) with parallax scrolling during follow-camera flight
+  const cloudShift = isFollowing ? (minX * 14) % 960 : 0;
   c.save();
   c.fillStyle = '#FAF6EE';
   c.globalAlpha = 0.65;
-  for (const [cx, cy, rx, ry] of [
+  for (const [baseCx, cy, rx, ry] of [
     [180, 95, 52, 16],
     [215, 90, 38, 14],
     [520, 72, 64, 18],
     [565, 68, 42, 14],
     [810, 110, 48, 15],
   ] as const) {
+    const cx = ((baseCx - cloudShift) % 1080 + 1080) % 1080 - 60;
     c.beginPath();
     c.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
     c.fill();
@@ -78,10 +102,10 @@ export function renderFlightCanvas(
     drawWindIndicator(c, launch.wind);
   }
 
-  // Ground grass block (--grass #7FA86B) with deterministic grass blade strokes
+  // Ground grass block (--grass #7FA86B) with world-space grass blades that scroll smoothly
   c.fillStyle = '#7FA86B';
   c.fillRect(0, 520, 960, 80);
-  drawGrassBlades(c);
+  drawGrassBlades(c, minX, maxX, mapX);
   c.strokeStyle = '#1F3A5F';
   c.lineWidth = 1.5;
   c.beginPath();
@@ -162,25 +186,38 @@ export function renderFlightCanvas(
     c.setLineDash([]);
   }
 
-  // Preview trajectory (dashed ink)
-  path(preview, Infinity, '#1F3A5F', true);
+  // Preview trajectory (dashed ink) — hidden in official competition mode so landing is not spoiled
+  if (!hidePreview) {
+    path(preview, Infinity, '#1F3A5F', true);
+  }
 
   // Launch stand & live release vector at (x = 0, y = 1.5 m)
   const originX = mapX(0);
   const originY = 520 - 1.5 * sy;
-  drawLaunchStand(c, originX, originY, launch, !actual, aero);
+  const activeLaunch = chargeState?.result.ready && launch
+    ? {...launch, angle: chargeState.result.angle, speed: chargeState.result.speed}
+    : launch;
+  drawLaunchStand(c, originX, originY, activeLaunch, !actual, aero);
 
-  // Apogee marker on active flight or preview
+  if (!actual && chargeState) {
+    drawChargeSlingshot(c, originX, originY, chargeState);
+  } else if (!actual) {
+    drawThrowPrompt(c, originX, originY);
+  }
+
+  // Apogee marker on active flight (or preview in free experiment mode)
   const refFlight = actual ?? preview;
   const refLimit = actual ? elapsed : Infinity;
-  drawApogeeCallout(c, refFlight, refLimit, mapX, sy);
+  if (actual || !hidePreview) {
+    drawApogeeCallout(c, refFlight, refLimit, mapX, sy);
+  }
 
-  const phases = aero && launch ? analyzeTrajectoryPhases(refFlight, aero, launch) : undefined;
-  if (phases && showForces) {
+  const phases = aero && activeLaunch && (actual || !hidePreview) ? analyzeTrajectoryPhases(refFlight, aero, activeLaunch) : undefined;
+  if (phases && showForces && (actual || !hidePreview)) {
     drawGlideTransitionCallout(c, phases, refLimit, mapX, sy);
   }
 
-  if (ghost) {
+  if (ghost && !hidePreview) {
     path(ghost, actual ? elapsed : Infinity, '#6B7280', true);
     if (actual) {
       const pos = playback(ghost, Math.min(elapsed, ghost.duration)).sample;
@@ -196,8 +233,8 @@ export function renderFlightCanvas(
     const px = mapX(pos.x);
     const py = 520 - pos.y * sy;
 
-    if (aero && launch) {
-      activeTelemetry = telemetryAt(actual, aero, launch, elapsed);
+    if (aero && activeLaunch) {
+      activeTelemetry = telemetryAt(actual, aero, activeLaunch, elapsed);
       if (showForces) {
         if (!frame.finished) {
           drawForceVectors(c, px, py, activeTelemetry);
@@ -211,21 +248,36 @@ export function renderFlightCanvas(
     if (frame.finished && actual.landed) {
       drawLandingPin(c, mapX(actual.distance), 520, actual.distance);
     }
-  } else if (aero && launch) {
-    activeTelemetry = telemetryAt(preview, aero, launch, 0);
+  } else if (aero && activeLaunch) {
+    activeTelemetry = telemetryAt(preview, aero, activeLaunch, 0);
     if (showForces) {
       drawForceVectors(c, originX, originY, activeTelemetry);
       drawTelemetryHud(c, activeTelemetry);
     }
   }
 
-  if (showPolar && aero && launch && phases && activeTelemetry) {
-    const polar = computeAeroPolar(aero, launch.wind);
+  if (showPolar && aero && activeLaunch && phases && activeTelemetry) {
+    const polar = computeAeroPolar(aero, activeLaunch.wind);
     drawPolarAndEnergyInset(c, polar, phases, activeTelemetry, aero);
+  }
+
+  if (paused && actual) {
+    c.save();
+    c.fillStyle = 'rgba(250, 246, 238, 0.92)';
+    c.strokeStyle = '#1F3A5F';
+    c.lineWidth = 1.4;
+    c.fillRect(422, 16, 116, 30);
+    c.strokeRect(422, 16, 116, 30);
+    c.font = "12px 'IBM Plex Mono', monospace";
+    c.fillStyle = '#1F3A5F';
+    c.textAlign = 'center';
+    c.fillText('❚❚ 已暂停', 480, 35);
+    c.restore();
   }
 
   c.font = "16px 'IBM Plex Mono', monospace";
   c.fillStyle = '#1F3A5F';
+  c.textAlign = 'left';
   for (let i = 0; i <= 4; i++) {
     c.fillText(`${(minX + ((maxX - minX) * i) / 4).toFixed(0)} m`, 60 + (840 * i) / 4, 558);
   }
@@ -316,24 +368,101 @@ function drawTelemetryHud(c: CanvasRenderingContext2D, t: FlightTelemetry): void
   c.restore();
 }
 
-function drawGrassBlades(c: CanvasRenderingContext2D): void {
-  let seed = 94721;
-  const rand = () => {
-    seed = (seed * 1664525 + 1013904223) % 4294967296;
-    return seed / 4294967296;
-  };
+function drawGrassBlades(
+  c: CanvasRenderingContext2D,
+  minX: number,
+  maxX: number,
+  mapX: (x: number) => number,
+): void {
+  const startM = Math.floor(minX * 2) / 2;
+  const endM = Math.ceil(maxX * 2) / 2;
   c.save();
   c.strokeStyle = '#1F3A5F';
-  c.globalAlpha = 0.22;
+  c.globalAlpha = 0.24;
   c.lineWidth = 1;
-  for (let i = 0; i < 95; i++) {
-    const x = rand() * 960;
-    const y = 522 + rand() * 14;
+  for (let m = startM; m <= endM; m += 0.5) {
+    const hash = Math.abs(Math.sin(m * 127.1) * 43758.5453) % 1;
+    const x = mapX(m + (hash - 0.5) * 0.35);
+    if (x < -10 || x > 970) continue;
+    const y = 522 + (hash * 14);
     c.beginPath();
     c.moveTo(x, y + 4);
-    c.lineTo(x + (rand() - 0.5) * 4, y - 3);
+    c.lineTo(x + (hash - 0.5) * 5, y - 3);
     c.stroke();
   }
+  c.restore();
+}
+
+function drawThrowPrompt(c: CanvasRenderingContext2D, ox: number, oy: number): void {
+  c.save();
+  c.strokeStyle = '#D9482B';
+  c.globalAlpha = 0.32;
+  c.lineWidth = 1.4;
+  c.setLineDash([4, 4]);
+  c.beginPath();
+  c.arc(ox, oy, 26, 0, Math.PI * 2);
+  c.stroke();
+  c.setLineDash([]);
+  c.globalAlpha = 0.85;
+  c.font = "11px 'IBM Plex Mono', monospace";
+  c.fillStyle = '#1F3A5F';
+  c.textAlign = 'left';
+  c.fillText('↖ 向后下方拖动蓄力，松手投掷', Math.max(16, ox - 12), Math.min(508, oy + 48));
+  c.restore();
+}
+
+function drawChargeSlingshot(
+  c: CanvasRenderingContext2D,
+  ox: number,
+  oy: number,
+  charge: {anchor: CanvasPoint; pointer: CanvasPoint; result: DragThrowResult},
+): void {
+  const {pointer, result} = charge;
+  const pullX = ox + result.pullVector.x;
+  const pullY = oy + result.pullVector.y;
+
+  c.save();
+  // Elastic pull-back band from launch stand to finger/cursor
+  c.strokeStyle = result.ready ? '#D9482B' : '#6B7280';
+  c.lineWidth = result.ready ? 2.2 : 1.4;
+  c.setLineDash([5, 4]);
+  c.beginPath();
+  c.moveTo(ox, oy);
+  c.lineTo(pullX, pullY);
+  c.stroke();
+  c.setLineDash([]);
+
+  // Pull handle dot
+  c.fillStyle = result.ready ? '#D9482B' : '#6B7280';
+  c.beginPath();
+  c.arc(pullX, pullY, 6, 0, Math.PI * 2);
+  c.fill();
+
+  // Power gauge arc around launch origin
+  if (result.ready) {
+    c.strokeStyle = '#C9A227';
+    c.lineWidth = 3;
+    c.beginPath();
+    c.arc(ox, oy, 32, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * result.chargeRatio);
+    c.stroke();
+  }
+
+  // Live charge readout pill
+  const label = result.ready
+    ? `蓄力 ${Math.round(result.chargeRatio * 100)}% · 仰角 ${result.angle}° · 初速 ${result.speed} m/s`
+    : '继续向后下方拉动以蓄力（松手取消）';
+  c.font = "12px 'IBM Plex Mono', monospace";
+  const w = Math.min(340, c.measureText(label).width + 20);
+  const bx = Math.max(14, Math.min(946 - w, pointer.x - w / 2));
+  const by = Math.max(68, Math.min(478, oy - 58));
+  c.fillStyle = 'rgba(250, 246, 238, 0.94)';
+  c.strokeStyle = result.ready ? '#D9482B' : '#6B7280';
+  c.lineWidth = 1.2;
+  c.fillRect(bx, by, w, 26);
+  c.strokeRect(bx, by, w, 26);
+  c.fillStyle = result.ready ? '#1F3A5F' : '#6B7280';
+  c.textAlign = 'left';
+  c.fillText(label, bx + 10, by + 17);
   c.restore();
 }
 

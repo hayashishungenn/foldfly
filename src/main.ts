@@ -3,6 +3,7 @@ import {playback, airSpeedAt} from './game/playback';
 import {Sound} from './audio/sound';
 import {challengeResult, type Challenge} from './game/challenge';
 import {bestFlight, decodeGhost, encodeGhost, ghostStorageKey} from './game/ghost';
+import {mapDragToThrow, type CanvasPoint, type DragThrowResult} from './game/throw-control';
 import './style.css';
 import {papers, weights, weightHints} from './paper/papers';
 import {planes, archives, type PlaneId} from './fold/planes';
@@ -24,7 +25,7 @@ import {analyzeFlight} from './aero/diagnostics';
 import {analyzeTrajectoryPhases, computeAeroPolar, sweepLaunchAngles} from './aero/polar';
 import {simulate, FLIGHT_MODEL_VERSION, type Flight, type Throw} from './aero/integrator';
 import {foldViewport, renderFoldCanvas, renderPlaneBlueprintSvg, type FoldViewMode} from './render/fold2d';
-import {renderFlightCanvas} from './render/flight2d';
+import {flightLaunchAnchor, renderFlightCanvas} from './render/flight2d';
 
 const app = document.querySelector<HTMLDivElement>('#app')!;
 const sound = new Sound();
@@ -46,6 +47,10 @@ let flight: Flight | null = null;
 let previousFlight: Flight | null = null;
 let showForces = true;
 let showPolar = true;
+let followCamera = true;
+let flightPaused = false;
+let pausedElapsed = 0;
+let chargeState: {anchor: CanvasPoint; pointer: CanvasPoint; result: DragThrowResult} | null = null;
 let playbackRate = 1;
 let playStart = 0;
 let animation = 0;
@@ -432,10 +437,113 @@ function render() {
     ? `分享的成绩：${sharedResult.distance.toFixed(1)} m · ${sharedResult.duration.toFixed(1)} s · 最高 ${sharedResult.height.toFixed(1)} m。${preview.landed && matchesSharedResult(sharedResult, preview) ? '当前模型可复现。' : '当前模型结果不同，可能来自其他版本。'}`
     : '';
   shell(
-    `<section><div class="section-head"><div><p class="eyebrow">03 / 试飞场</p><h2>给它一次飞行</h2><p>${papers[paper].name} · ${gsm} gsm · ${currentPlane().name}</p></div><div class="flight-head-tools"><button type="button" id="toggle-forces" class="${showForces ? 'selected' : ''}" aria-pressed="${showForces}">${showForces ? '受力矢量：开' : '受力矢量：关'}</button><button type="button" id="toggle-polar" class="${showPolar ? 'selected' : ''}" aria-pressed="${showPolar}">${showPolar ? '极曲线图：开' : '极曲线图：关'}</button><button id="change">换纸重折</button></div></div>${legacyMessage ? `<p class="legacy-share" role="status">${legacyMessage}</p>` : ''}${sharedMessage ? `<p class="shared-result">${sharedMessage}</p>` : ''}<div class="canvas-wrap"><canvas id="flight" width="960" height="600" aria-label="飞行轨迹与试飞场"></canvas><div class="confetti" aria-hidden="true">${Array.from({length: 24}, (_, i) => `<i style="--x:${(i * 41) % 100}%;--delay:${(i % 6) * 0.08}s;--colour:${['var(--paper)', 'var(--mark-red)', 'var(--ink)'][i % 3]}"></i>`).join('')}</div></div><p class="ghost-note">灰色轨迹：本机该赛制的个人最佳；朱红标记：出手速度矢量与历史目标。</p><div class="challenge"><span>选择挑战</span><button id="distance-challenge" class="${challenge === 'distance' ? 'selected' : ''}" aria-pressed="${challenge === 'distance'}">距离赛 · 88 m</button><button id="duration-challenge" class="${challenge === 'duration' ? 'selected' : ''}" aria-pressed="${challenge === 'duration'}">滞空赛 · 29.2 s</button><p id="challenge-result">${flight ? '挑战结算将在落地后显示' : '调整投掷，挑战历史成绩'}</p></div><div class="flight-status">${flight ? '试飞完成 · 调整参数，再挑战一次' : '准备起飞 · 调整参数，查看虚线预演'} <span class="mono">个人最佳 ${bestLabel()}</span></div><div class="results" aria-live="polite"><div><small>飞行距离</small><strong>${flight ? flight.distance.toFixed(1) : '—'} <em>m</em></strong></div><div><small>滞空时间</small><strong>${flight ? flight.duration.toFixed(1) : '—'} <em>s</em></strong></div><div><small>最高高度</small><strong>${flight ? flight.height.toFixed(1) : '—'} <em>m</em></strong></div></div><div class="flight-diagnostic" id="flight-diagnostic"><div class="diag-head"><span class="mono diag-regime">${analysis.regimeLabel}</span>${analysis.comparison ? `<span class="mono diag-compare">${analysis.comparison.summary}</span>` : ''}</div><p id="diag-verdict">${analysis.verdict}</p></div><details class="physics aero-deep-panel" open><summary>气动极曲线与轨迹三阶段深度分析</summary><div id="aero-deep-content">${renderAeroDeepHtml(flight ?? preview, aero, {angle, speed, wind})}</div></details><details class="physics"><summary>查看这架飞机的几何气动参数</summary><p>质量、重心、翼面焦点和转动惯量全部从折叠后的真实纸层多边形与纸张克重实时积分得出。</p><div class="physics-grid"><span>质量 <b class="mono">${(aero.mass * 1000).toFixed(2)} g</b></span><span>翼展 <b class="mono">${(aero.span * 100).toFixed(1)} cm</b></span><span>翼面积 <b class="mono">${(aero.wingArea * 10000).toFixed(0)} cm²</b></span><span>展弦比 <b class="mono">${aero.aspectRatio.toFixed(2)}</b></span><span>重心（距机头） <b class="mono">${((aero.cg.y - aero.noseY) * 100).toFixed(1)} cm</b></span><span>静稳定余量 <b class="mono">${(metrics.staticMargin * 100).toFixed(1)}%</b></span><span>翼载荷 <b class="mono">${metrics.wingLoading.toFixed(2)} N/m²</b></span><span>龙骨深度 <b class="mono">${(metrics.keelDepth * 100).toFixed(1)} cm</b></span><span>基准滑翔速 <b class="mono">${metrics.nominalGlideSpeed.toFixed(1)} m/s</b></span></div></details><div class="recommendation"><p><b>投掷起点：</b>${currentPlane().recommendation.note}</p><button id="apply-recommendation">采用建议角度与力度</button></div><div class="controls">${slider('angle', '投掷角度', 0, 75, angle, '°')}${slider('speed', '投掷力度', 6, 28, speed, ' m/s')}${slider('wind', '风速', -4, 4, wind, ' m/s')}</div><div class="wind-presets"><span>风场速设：</span>${[-3, 0, 3].map(w => `<button type="button" class="wind-preset ${wind === w ? 'selected' : ''}" data-wind="${w}">${w < 0 ? `逆风 ${w}` : w === 0 ? '无风 0' : `顺风 +${w}`} m/s</button>`).join('')}</div><div class="actions"><span>虚线为预演轨迹 · 正风速为顺风</span><button id="share">分享这次配置</button>${flight ? '<button id="slow-replay">慢动作回放 0.4×</button>' : ''}<button class="primary" id="throw">${flight ? '再次投掷 →' : '投掷纸飞机 →'}</button></div></section>`,
+    `<section><div class="section-head"><div><p class="eyebrow">03 / 试飞场</p><h2>给它一次飞行</h2><p>${papers[paper].name} · ${gsm} gsm · ${currentPlane().name}</p></div><div class="flight-head-tools"><button type="button" id="toggle-camera" class="${followCamera ? 'selected' : ''}" aria-pressed="${followCamera}">${followCamera ? '跟随相机：开' : '跟随相机：关'}</button><button type="button" id="toggle-forces" class="${showForces ? 'selected' : ''}" aria-pressed="${showForces}">${showForces ? '受力矢量：开' : '受力矢量：关'}</button><button type="button" id="toggle-polar" class="${showPolar ? 'selected' : ''}" aria-pressed="${showPolar}">${showPolar ? '极曲线图：开' : '极曲线图：关'}</button><button id="change">换纸重折</button></div></div>${legacyMessage ? `<p class="legacy-share" role="status">${legacyMessage}</p>` : ''}${sharedMessage ? `<p class="shared-result">${sharedMessage}</p>` : ''}<div class="canvas-wrap"><canvas id="flight" class="${!flight ? 'interactive-fold' : ''}" width="960" height="600" aria-label="飞行轨迹与试飞场"></canvas><div class="confetti" aria-hidden="true">${Array.from({length: 24}, (_, i) => `<i style="--x:${(i * 41) % 100}%;--delay:${(i % 6) * 0.08}s;--colour:${['var(--paper)', 'var(--mark-red)', 'var(--ink)'][i % 3]}"></i>`).join('')}</div></div><p class="ghost-note">在画布上向后下方拖动蓄力，松手即投掷；下方滑块可供精确实验微调。</p><div class="challenge"><span>选择挑战</span><button id="distance-challenge" class="${challenge === 'distance' ? 'selected' : ''}" aria-pressed="${challenge === 'distance'}">距离赛 · 88 m</button><button id="duration-challenge" class="${challenge === 'duration' ? 'selected' : ''}" aria-pressed="${challenge === 'duration'}">滞空赛 · 29.2 s</button><p id="challenge-result">${flight ? '挑战结算将在落地后显示' : '调整投掷，挑战历史成绩'}</p></div><div class="flight-status">${flight ? '试飞完成 · 调整参数，再挑战一次' : '准备起飞 · 拖动蓄力或调整滑块，查看虚线预演'} <span class="mono">个人最佳 ${bestLabel()}</span></div><div class="results" aria-live="polite"><div><small>飞行距离</small><strong>${flight ? flight.distance.toFixed(1) : '—'} <em>m</em></strong></div><div><small>滞空时间</small><strong>${flight ? flight.duration.toFixed(1) : '—'} <em>s</em></strong></div><div><small>最高高度</small><strong>${flight ? flight.height.toFixed(1) : '—'} <em>m</em></strong></div></div><div class="flight-diagnostic" id="flight-diagnostic"><div class="diag-head"><span class="mono diag-regime">${analysis.regimeLabel}</span>${analysis.comparison ? `<span class="mono diag-compare">${analysis.comparison.summary}</span>` : ''}</div><p id="diag-verdict">${analysis.verdict}</p></div><details class="physics aero-deep-panel"><summary>气动极曲线与轨迹三阶段深度分析</summary><div id="aero-deep-content">${renderAeroDeepHtml(flight ?? preview, aero, {angle, speed, wind})}</div></details><details class="physics"><summary>查看这架飞机的几何气动参数</summary><p>质量、重心、翼面焦点和转动惯量全部从折叠后的真实纸层多边形与纸张克重实时积分得出。</p><div class="physics-grid"><span>质量 <b class="mono">${(aero.mass * 1000).toFixed(2)} g</b></span><span>翼展 <b class="mono">${(aero.span * 100).toFixed(1)} cm</b></span><span>翼面积 <b class="mono">${(aero.wingArea * 10000).toFixed(0)} cm²</b></span><span>展弦比 <b class="mono">${aero.aspectRatio.toFixed(2)}</b></span><span>重心（距机头） <b class="mono">${((aero.cg.y - aero.noseY) * 100).toFixed(1)} cm</b></span><span>静稳定余量 <b class="mono">${(metrics.staticMargin * 100).toFixed(1)}%</b></span><span>翼载荷 <b class="mono">${metrics.wingLoading.toFixed(2)} N/m²</b></span><span>龙骨深度 <b class="mono">${(metrics.keelDepth * 100).toFixed(1)} cm</b></span><span>基准滑翔速 <b class="mono">${metrics.nominalGlideSpeed.toFixed(1)} m/s</b></span></div></details><div class="recommendation"><p><b>投掷起点：</b>${currentPlane().recommendation.note}</p><button id="apply-recommendation">采用建议角度与力度</button></div><div class="controls">${slider('angle', '投掷角度', 0, 75, angle, '°')}${slider('speed', '投掷力度', 6, 28, speed, ' m/s')}${slider('wind', '风速', -4, 4, wind, ' m/s')}</div><div class="wind-presets"><span>风场速设：</span>${[-3, 0, 3].map(w => `<button type="button" class="wind-preset ${wind === w ? 'selected' : ''}" data-wind="${w}">${w < 0 ? `逆风 ${w}` : w === 0 ? '无风 0' : `顺风 +${w}`} m/s</button>`).join('')}</div><div class="actions"><span>虚线为预演轨迹 · 正风速为顺风</span><button id="share">分享这次配置</button>${flight ? `<button id="pause-flight">${flightPaused ? '继续飞行' : '暂停'}</button><button id="slow-replay">慢动作回放 0.4×</button>` : ''}<button class="primary" id="throw">${flight ? '再次投掷 →' : '投掷纸飞机 →'}</button></div></section>`,
   );
   drawFlight(preview, flight, aero);
 
+  const launchNow = (launchAngle: number, launchSpeed: number) => {
+    cancelAnimationFrame(animation);
+    sound.activate();
+    angle = launchAngle;
+    speed = launchSpeed;
+    sharedResult = undefined;
+    landingSoundPlayed = false;
+    celebrated = false;
+    flightPaused = false;
+    pausedElapsed = 0;
+    chargeState = null;
+    playbackRate = 1;
+    if (flight) previousFlight = flight;
+    activeGhost = getGhost(challenge);
+    preview = simulate(aero, {angle, speed, wind});
+    flight = preview;
+    playStart = performance.now();
+    render();
+  };
+
+  // Drag-to-charge slingshot throw on the flight canvas (desktop mouse + mobile touch)
+  const flightCanvas = document.querySelector<HTMLCanvasElement>('#flight')!;
+  let chargePointerId: number | null = null;
+  let chargeAnchor: CanvasPoint = {x: 120, y: 420};
+  const toFlightCanvasPt = (e: PointerEvent): CanvasPoint => {
+    const rect = flightCanvas.getBoundingClientRect();
+    return {
+      x: ((e.clientX - rect.left) / Math.max(1, rect.width)) * 960,
+      y: ((e.clientY - rect.top) / Math.max(1, rect.height)) * 600,
+    };
+  };
+  flightCanvas.onpointerdown = e => {
+    // Allow drag-to-charge when ready (no flight) or after previous flight has finished
+    const finished = !flight || reduced.matches || currentElapsed(flight) >= flight.duration;
+    if (!finished || chargePointerId !== null) return;
+    const pt = toFlightCanvasPt(e);
+    if (pt.y > 530) return;
+    sound.activate();
+    if (flight) {
+      flight = null;
+      flightPaused = false;
+      pausedElapsed = 0;
+    }
+    chargePointerId = e.pointerId;
+    chargeAnchor = flightLaunchAnchor(preview, null, getGhost(challenge), false);
+    // If pointer starts away from the stand, use the pointer press point as the relative anchor
+    const anchor = Math.hypot(pt.x - chargeAnchor.x, pt.y - chargeAnchor.y) <= 90 ? chargeAnchor : pt;
+    chargeAnchor = anchor;
+    const res = mapDragToThrow(chargeAnchor, pt);
+    chargeState = {anchor: chargeAnchor, pointer: pt, result: res};
+    flightCanvas.classList.add('dragging');
+    flightCanvas.setPointerCapture?.(e.pointerId);
+    drawFlight(preview, null, aero);
+  };
+  flightCanvas.onpointermove = e => {
+    if (chargePointerId !== e.pointerId) return;
+    const pt = toFlightCanvasPt(e);
+    const res = mapDragToThrow(chargeAnchor, pt);
+    chargeState = {anchor: chargeAnchor, pointer: pt, result: res};
+    if (res.ready) {
+      angle = res.angle;
+      speed = res.speed;
+      preview = simulate(aero, {angle, speed, wind});
+      const angleInput = document.querySelector<HTMLInputElement>('#angle');
+      const speedInput = document.querySelector<HTMLInputElement>('#speed');
+      if (angleInput) {
+        angleInput.value = String(angle);
+        const b = angleInput.closest('label')?.querySelector('b');
+        if (b) b.textContent = `${angle}°`;
+      }
+      if (speedInput) {
+        speedInput.value = String(speed);
+        const b = speedInput.closest('label')?.querySelector('b');
+        if (b) b.textContent = `${speed} m/s`;
+      }
+    }
+    drawFlight(preview, null, aero);
+  };
+  const endCharge = (e: PointerEvent, cancelled: boolean) => {
+    if (chargePointerId !== e.pointerId) return;
+    chargePointerId = null;
+    flightCanvas.classList.remove('dragging');
+    const pt = toFlightCanvasPt(e);
+    const res = mapDragToThrow(chargeAnchor, pt);
+    chargeState = null;
+    if (!cancelled && res.ready) {
+      launchNow(res.angle, res.speed);
+    } else {
+      drawFlight(preview, flight, aero);
+    }
+  };
+  flightCanvas.onpointerup = e => endCharge(e, false);
+  flightCanvas.onpointercancel = e => endCharge(e, true);
+
+  const cameraBtn = document.querySelector<HTMLButtonElement>('#toggle-camera')!;
+  cameraBtn.onclick = () => {
+    followCamera = !followCamera;
+    cameraBtn.classList.toggle('selected', followCamera);
+    cameraBtn.setAttribute('aria-pressed', String(followCamera));
+    cameraBtn.textContent = followCamera ? '跟随相机：开' : '跟随相机：关';
+    cancelAnimationFrame(animation);
+    drawFlight(preview, flight, aero);
+  };
   const forcesBtn = document.querySelector<HTMLButtonElement>('#toggle-forces')!;
   forcesBtn.onclick = () => {
     showForces = !showForces;
@@ -524,23 +632,36 @@ function render() {
     };
   }
   document.querySelector<HTMLButtonElement>('#throw')!.onclick = () => {
-    sound.activate();
-    sharedResult = undefined;
-    landingSoundPlayed = false;
-    celebrated = false;
-    playbackRate = 1;
-    if (flight) previousFlight = flight;
-    activeGhost = getGhost(challenge);
-    flight = preview;
-    playStart = performance.now();
-    render();
+    launchNow(angle, speed);
   };
+  const pauseBtn = document.querySelector<HTMLButtonElement>('#pause-flight');
+  if (pauseBtn) {
+    pauseBtn.onclick = () => {
+      if (!flight) return;
+      const cur = currentElapsed(flight);
+      if (cur >= flight.duration) return;
+      if (!flightPaused) {
+        pausedElapsed = cur;
+        flightPaused = true;
+        cancelAnimationFrame(animation);
+        sound.wind(0);
+      } else {
+        flightPaused = false;
+        playStart = performance.now() - (pausedElapsed / playbackRate) * 1000;
+      }
+      pauseBtn.textContent = flightPaused ? '继续飞行' : '暂停';
+      drawFlight(preview, flight, aero);
+    };
+  }
   const slowBtn = document.querySelector<HTMLButtonElement>('#slow-replay');
   if (slowBtn) {
     slowBtn.onclick = () => {
       if (!flight) return;
+      cancelAnimationFrame(animation);
       sound.activate();
       landingSoundPlayed = false;
+      flightPaused = false;
+      pausedElapsed = 0;
       playbackRate = 0.4;
       playStart = performance.now();
       render();
@@ -686,15 +807,17 @@ function renderAeroDeepHtml(targetFlight: Flight, aero: Aero, launch: Throw): st
   return `<p class="aero-deep-intro">基于薄翼升阻极曲线 CL(CD)、Polhamus 前缘涡升力模型与 Stengel 纵向动力学实时解算：</p><div class="phase-list">${phaseCards}</div><div class="physics-grid aero-polar-grid"><span>最大滑翔比 <b class="mono">${polar.bestGlide.ld.toFixed(2)} (@ ${polar.bestGlide.alphaDeg.toFixed(1)}°, ${polar.bestGlide.speed.toFixed(1)} m/s)</b></span><span>最小沉降率 <b class="mono">${polar.minSink.sinkRate.toFixed(2)} m/s (@ ${polar.minSink.alphaDeg.toFixed(1)}°, ${polar.minSink.speed.toFixed(1)} m/s)</b></span><span>临界失速点 <b class="mono">α=${polar.stallAngleDeg.toFixed(1)}° (CL=${polar.clMax.toFixed(2)}, V_s=${polar.stallSpeed.toFixed(1)} m/s)</b></span><span>短周期俯仰模态 <b class="mono">T_sp=${polar.stability.shortPeriodPeriod.toFixed(2)} s (ζ=${polar.stability.shortPeriodDamping.toFixed(2)})</b></span><span>长周期 Phugoid <b class="mono">T_ph=${polar.stability.phugoidPeriod.toFixed(2)} s (ζ=${polar.stability.phugoidDamping.toFixed(3)})</b></span><span>当前力度最佳角 <b class="mono">距离 ${sweep.bestDistance.angle}° (${sweep.bestDistance.distance.toFixed(1)}m) · 滞空 ${sweep.bestDuration.angle}° (${sweep.bestDuration.duration.toFixed(1)}s)</b></span><span>配平弦雷诺数 <b class="mono">Re ≈ ${(polar.reynoldsAtBestGlide / 1000).toFixed(1)}×10³ (低雷诺数层流区)</b></span><span>Polhamus 前缘涡升 <b class="mono">占总升力 ${polar.vortexLiftSharePct.toFixed(1)}% (@ 配平攻角)</b></span><span>近地效应区高度 <b class="mono">h &lt; ${(aero.span * 100).toFixed(1)} cm (McCormick 减阻垫升)</b></span></div><div class="trim-note-box"><small class="mono">设计者调校手记 · ${trimNote.source}</small><p>${trimNote.trim}</p></div>`;
 }
 
+function currentElapsed(actual: Flight): number {
+  if (reduced.matches) return actual.duration;
+  if (flightPaused) return Math.min(actual.duration, pausedElapsed);
+  return Math.min(actual.duration, ((performance.now() - playStart) / 1000) * playbackRate);
+}
+
 function drawFlight(preview: Flight, actual: Flight | null, aero?: Aero) {
   const canvas = document.querySelector<HTMLCanvasElement>('#flight');
   if (!canvas) return;
   const ghost = actual ? activeGhost : getGhost(challenge);
-  const elapsed = actual
-    ? reduced.matches
-      ? actual.duration
-      : Math.min(actual.duration, ((performance.now() - playStart) / 1000) * playbackRate)
-    : 0;
+  const elapsed = actual ? currentElapsed(actual) : 0;
   renderFlightCanvas(
     canvas,
     preview,
@@ -706,10 +829,11 @@ function drawFlight(preview: Flight, actual: Flight | null, aero?: Aero) {
     aero,
     showForces,
     showPolar,
+    {followCamera, chargeState, paused: flightPaused},
   );
   if (actual) {
     updateFlightFeedback(actual, elapsed, aero);
-    if (elapsed < actual.duration) {
+    if (elapsed < actual.duration && !flightPaused) {
       animation = requestAnimationFrame(() => drawFlight(preview, actual, aero));
     }
   }
@@ -774,6 +898,8 @@ function updateFlightFeedback(actual: Flight, elapsed: number, _aero?: Aero) {
     launch.disabled = !done;
     launch.textContent = done ? '再次投掷 →' : '飞行中…';
   }
+  const pauseBtn = document.querySelector<HTMLButtonElement>('#pause-flight');
+  if (pauseBtn) pauseBtn.disabled = done;
   const slowBtn = document.querySelector<HTMLButtonElement>('#slow-replay');
   if (slowBtn) slowBtn.disabled = !done;
   document.querySelectorAll<HTMLInputElement>('.controls input').forEach(el => (el.disabled = !done));
