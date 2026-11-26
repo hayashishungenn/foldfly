@@ -1,8 +1,10 @@
 import type {Aero} from './extract';
 import {coefficients, pitchAcceleration} from './model';
+import {creaseCrispness} from '../paper/material';
+import type {MaterialProfile} from '../paper/material';
 
 /** Increment when gameplay physics changes enough to alter shared trajectories. */
-export const FLIGHT_MODEL_VERSION = 3;
+export const FLIGHT_MODEL_VERSION = 4;
 export type Throw = {angle: number; speed: number; wind: number};
 export type Sample = {t: number; x: number; y: number; pitch: number};
 /** Alternate rates are for numerical verification; gameplay uses 240 Hz. */
@@ -11,6 +13,10 @@ export type SimulationOptions = {
   dragModel?: 'empirical' | 'skin-friction';
   stepsPerSecond?: number;
   experimentalHeightMoment?: boolean;
+  /** 折痕质量 ∈ [0,1](v4)。默认 1 = 完美折痕,与 v3 逐位一致。 */
+  foldQuality?: number;
+  /** 纸张材质(v4)。缺省按普通复印纸处理,即理想定形保持。 */
+  material?: MaterialProfile;
 };
 export type Flight = {samples: Sample[]; distance: number; duration: number; height: number; landed: boolean};
 
@@ -62,6 +68,17 @@ export function simulate(a: Aero, input: Throw, options: SimulationOptions = {})
 
   const clSlope = (Math.PI * ar) / (1 + Math.sqrt(1 + (ar / 2) ** 2));
 
+  // v4 折痕质量与材质定形通道(披露见 docs/AERO-AUDIT.md):
+  // - foldQuality<1:折痕不齐 → 升力小幅损失 + 阻力放大;作用于全部机型(含未拱度尖头机)。
+  // - 材质折痕利落度 × 折痕质量 → 翼面定形保持 shapeKeep,只允许退化或持平:理想几何
+  //   是上界,更挺括的纸不产生超理想增益(几何驱动原则)。
+  // - foldQuality=1 且缺省材质时全部因子为 1,轨迹与 v3 逐位一致(校准锚点零漂移)。
+  const quality = options.foldQuality ?? 1;
+  if (!Number.isFinite(quality) || quality < 0 || quality > 1) throw new Error('折痕质量必须是 [0,1] 内的有限数');
+  const crispNorm = options.material ? creaseCrispness(options.material.grade.id) / creaseCrispness('copy') : 1;
+  const shapeKeep = Math.min(1, quality * crispNorm);
+  const forceScale = {lift: 1 - 0.1 * (1 - quality), drag: 1 + 0.25 * (1 - quality)};
+
   const samples: Sample[] = [{t, x, y, pitch}];
   for (let i = 0; i < hz * 60; i++) {
     const oldX = x;
@@ -79,11 +96,13 @@ export function simulate(a: Aero, input: Throw, options: SimulationOptions = {})
         const base = coefficients(alpha, a, v, options.dragModel);
 
         if (cambered === 0 || v < 1e-4) {
+          const cl = base.cl * forceScale.lift;
+          const cd = base.cd * forceScale.drag;
           const q = 0.5 * 1.225 * v * v * a.wingArea;
           return {
-            ax: v ? (((-base.cd * ux - base.cl * w) / v) * q) / a.mass : 0,
-            ay: (v ? (((-base.cd * w + base.cl * ux) / v) * q) / a.mass : 0) - 9.81,
-            angular: pitchAcceleration(alpha, rate, v, a, options.dragModel, options.experimentalHeightMoment),
+            ax: v ? (((-cd * ux - cl * w) / v) * q) / a.mass : 0,
+            ay: (v ? (((-cd * w + cl * ux) / v) * q) / a.mass : 0) - 9.81,
+            angular: pitchAcceleration(alpha, rate, v, a, options.dragModel, options.experimentalHeightMoment, forceScale),
           };
         }
 
@@ -97,9 +116,10 @@ export function simulate(a: Aero, input: Throw, options: SimulationOptions = {})
         const activeEndurance = enduranceMode * smoothstep(0.08, -0.02, gamma) * shallowGlide;
 
         // Camber lift augmentation in attached low-speed endurance glide:
-        const slowEndurance = activeEndurance * Math.exp(-((v / 3.4) ** 2)) * attached;
+        // v4:slowEndurance 乘以定形保持因子——软纸/折痕不齐时翼面拱度立不住。
+        const slowEndurance = activeEndurance * Math.exp(-((v / 3.4) ** 2)) * attached * shapeKeep;
         const clCamber = 1.92 * slowEndurance;
-        const cl = base.cl + clCamber;
+        const cl = (base.cl + clCamber) * forceScale.lift;
 
         // Broad low-SM wings thrown upward at high speed experience aeroelastic pitch-up in climb
         const steepClimbPenalty =
@@ -119,11 +139,14 @@ export function simulate(a: Aero, input: Throw, options: SimulationOptions = {})
         const overSteepPenetrator = penetratorMode * smoothstep(0.70, 0.92, gamma) * 0.12;
         const finenessPenalty = 1 + 0.45 * Math.max(0, 1.05 - slenderness) + 0.25 * bodyRatio;
         const cd0Clean =
-          (0.0165 - 0.0031 * distanceGliderMode + 0.00090 * penetratorMode - 0.0138 * slowEndurance) * finenessPenalty +
+          (0.0165 - 0.0031 * distanceGliderMode + 0.00090 * penetratorMode - 0.0138 * slowEndurance) *
+            finenessPenalty *
+            (1 + 0.2 * (1 - shapeKeep)) +
           highSpeedEnduranceBrake +
           overSteepPenetrator;
-        const eOswald = 0.80 + 0.15 * distanceGliderMode + 0.05 * penetratorMode + 7.20 * slowEndurance;
-        const cdClean = cd0Clean + (cl * cl) / (Math.PI * ar * eOswald);
+        const eOswald =
+          (0.80 + 0.15 * distanceGliderMode + 0.05 * penetratorMode + 7.20 * slowEndurance) * (1 - 0.15 * (1 - shapeKeep));
+        const cdClean = (cd0Clean + (cl * cl) / (Math.PI * ar * eOswald)) * forceScale.drag;
 
         const climbDragOpen =
           (1 - penetratorMode) * (1 - enduranceMode) * smoothstep(0.016, 0.22, gamma) * 0.62;
@@ -138,7 +161,7 @@ export function simulate(a: Aero, input: Throw, options: SimulationOptions = {})
         return {
           ax: v ? (((-cd * ux - cl * w) / v) * q) / a.mass : 0,
           ay: (v ? (((-cd * w + cl * ux) / v) * q) / a.mass : 0) - 9.81,
-          angular: pitchAcceleration(alpha - trim, effectiveRate, v, a, options.dragModel, options.experimentalHeightMoment),
+          angular: pitchAcceleration(alpha - trim, effectiveRate, v, a, options.dragModel, options.experimentalHeightMoment, forceScale),
         };
       };
       const start = derivative(vx, vy, pitch, omega, y);
@@ -161,9 +184,11 @@ export function simulate(a: Aero, input: Throw, options: SimulationOptions = {})
       while (alpha > Math.PI) alpha -= 2 * Math.PI;
       while (alpha < -Math.PI) alpha += 2 * Math.PI;
       const {cl, cd} = coefficients(alpha, a, v, options.dragModel);
+      const clE = cl * forceScale.lift;
+      const cdE = cd * forceScale.drag;
       const q = 0.5 * 1.225 * v * v * a.wingArea;
-      const fx = v ? ((-cd * ux - cl * uy) / v) * q : 0;
-      const fy = v ? ((-cd * uy + cl * ux) / v) * q : 0;
+      const fx = v ? ((-cdE * ux - clE * uy) / v) * q : 0;
+      const fy = v ? ((-cdE * uy + clE * ux) / v) * q : 0;
       vx += (fx / a.mass) * dt;
       vy += (fy / a.mass - 9.81) * dt;
       x += vx * dt;

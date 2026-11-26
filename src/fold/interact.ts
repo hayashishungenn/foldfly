@@ -337,6 +337,41 @@ export function evaluateDrag(
 }
 
 /**
+ * 一次提交的折痕精度评分 ∈ [0,1](v4 折痕质量通道的数据来源):
+ * 以松手落点与目标点的距离归一化——精确落在目标点为 1,偏差达到整段行程为 0。
+ * 翻面与展开步骤不产生折痕,不应计分。
+ */
+export function foldAccuracy(target: InteractiveFoldTarget, dragStart: Point, pointer: Point): number {
+  const ev = evaluateDrag(target, dragStart, pointer);
+  if (!ev.shouldCommit || target.isFlip || target.isUnfold) return 0;
+  const miss = Math.hypot(pointer.x - target.targetPoint.x, pointer.y - target.targetPoint.y);
+  const travel = Math.max(0.02, Math.hypot(target.targetPoint.x - target.grabPoint.x, target.targetPoint.y - target.grabPoint.y));
+  return Math.max(0, Math.min(1, 1 - miss / travel));
+}
+
+/**
+ * 折序整体折痕质量(v4)∈ [0,1]:对折序中每条真实折痕的评分取平均;
+ * 未手动折叠的子操作视为按设计完成(1)。跳过教学仍保留已折步骤的误差。
+ * 翻面与展开步骤不是折痕,不参与评分。
+ */
+export function programFoldQuality(program: readonly FoldStep[], scores: ReadonlyMap<string, number>): number {
+  let total = 0;
+  let count = 0;
+  for (let step = 0; step < program.length; step++) {
+    const stepDef = program[step];
+    if (stepDef.unfold) continue;
+    const ops = stepOperations(stepDef);
+    ops.forEach((op, subOp) => {
+      if (op.flip) return;
+      const score = scores.get(`${step}:${subOp}`);
+      total += score === undefined ? 1 : Math.max(0, Math.min(1, score));
+      count++;
+    });
+  }
+  return count === 0 ? 1 : total / count;
+}
+
+/**
  * Render geometry for a single interactive sub-operation at `progress` in [0, 1],
  * preserving rotation, front/back shading, occlusion, and wing opening.
  */

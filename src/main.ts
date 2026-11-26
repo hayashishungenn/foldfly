@@ -28,8 +28,10 @@ import {replay, FOLD_ENGINE_VERSION} from './fold/engine';
 import {
   createFoldHistory,
   evaluateDrag,
+  foldAccuracy,
   isGrabHit,
   nextCursor,
+  programFoldQuality,
   pushHistory,
   redoHistory,
   resolveInteractiveTarget,
@@ -40,7 +42,7 @@ import {
 import {extract, aeroMetrics, type Aero} from './aero/extract';
 import {analyzeFlight} from './aero/diagnostics';
 import {analyzeTrajectoryPhases, computeAeroPolar, sweepLaunchAngles} from './aero/polar';
-import {simulate, FLIGHT_MODEL_VERSION, type Flight, type Throw} from './aero/integrator';
+import {simulate, FLIGHT_MODEL_VERSION, type Flight, type SimulationOptions, type Throw} from './aero/integrator';
 import {foldViewport, renderFoldCanvas, renderPlaneBlueprintSvg, type FoldViewMode} from './render/fold2d';
 import {
   flightLaunchAnchor,
@@ -58,6 +60,8 @@ let gsm: (typeof weights)[number] = 80;
 let grade: PaperGradeId = 'copy';
 let step = 0;
 let foldHistory: FoldHistory = createFoldHistory(0, 0);
+/** 手动折叠每条子操作的折痕精度(v4 折痕质量通道);自动/跳过的子操作视为按设计完成。 */
+let foldScores = new Map<string, number>();
 let manualFoldMode = true;
 let foldHint = false;
 let dragStatus: DragStatus = 'idle';
@@ -133,6 +137,10 @@ function saveCompetitionPbIfBetter(match: CompetitionMatch): boolean {
 }
 
 const currentPlane = () => planes[plane];
+/** v4 模拟选项:材质定形通道 + 折痕质量通道(正式比赛用预设折序 = 完美折痕)。 */
+function simOptions(gradeId: PaperGradeId, gsmValue: number, quality: number): SimulationOptions {
+  return {material: materialProfile(gradeId, gsmValue), foldQuality: quality};
+}
 const ghosts: Record<string, Flight | null> = {};
 let activeGhost: Flight | null = null;
 
@@ -289,6 +297,7 @@ function render() {
           plane = el.dataset.plane as PlaneId;
           angle = planes[plane].recommendation.angle;
           speed = planes[plane].recommendation.speed;
+          foldScores = new Map();
           render();
           document.querySelector<HTMLButtonElement>(`[data-plane="${plane}"]`)?.focus();
         }),
@@ -311,6 +320,7 @@ function render() {
     document.querySelector<HTMLButtonElement>('#start')!.onclick = () => {
       stage = 'fold';
       foldHistory = createFoldHistory(0, 0);
+      foldScores = new Map();
       step = 0;
       foldHint = false;
       dragStatus = 'idle';
@@ -395,6 +405,7 @@ function render() {
               animation = requestAnimationFrame(snapTick);
             } else {
               sound.fold();
+              foldScores.set(`${foldHistory.cursor.step}:${foldHistory.cursor.subOp}`, foldAccuracy(target, dragStart, pt));
               foldHistory = pushHistory(foldHistory, nextCursor(foldHistory.cursor, program));
               step = foldHistory.cursor.step;
               foldHint = false;
@@ -556,7 +567,7 @@ function render() {
       if (!f) {
         const pSheet = papers.find(p => p.id === activeMatch!.paper) ?? papers[0];
         const a = extract(replay(pSheet, planes[s.player.plane].steps.length, planes[s.player.plane].steps), activeMatch.gsm);
-        f = simulate(a, s.bestThrow.launch);
+        f = simulate(a, s.bestThrow.launch, simOptions(activeMatch!.grade ?? 'copy', activeMatch!.gsm, 1));
       }
       entries.push({
         label: `#${s.rank} ${s.player.name} (${planes[s.player.plane].name})`,
@@ -728,7 +739,10 @@ function render() {
 
   const aero = extract(replay(activeSheet, activePlaneDef.steps.length, activePlaneDef.steps), activeGsm);
   const metrics = aeroMetrics(aero);
-  let preview = simulate(aero, {angle, speed, wind: activeWind});
+  // v4:自由模式携带玩家手折的折痕质量;正式比赛用预设折序(完美折痕)。
+  const foldQuality = isOfficialActive ? 1 : programFoldQuality(activePlaneDef.steps, foldScores);
+  const options = simOptions(activeGrade, activeGsm, foldQuality);
+  let preview = simulate(aero, {angle, speed, wind: activeWind}, options);
   const analysis = analyzeFlight(flight ?? preview, aero, {angle, speed, wind: activeWind}, previousFlight);
   const sharedMessage =
     !isOfficialActive && sharedResult
@@ -756,7 +770,7 @@ function render() {
       : `<button class="primary" id="throw">${flight ? (isOfficialActive ? '飞行中…' : '再次投掷 →') : '投掷纸飞机 →'}</button>`;
 
   shell(
-    `<section><div class="section-head"><div><p class="eyebrow">02 / 飞行赛场${isOfficialActive ? ' · 正式比赛' : ''}</p><h2>${isOfficialActive ? (activeTurn ? `${activeTurn.player.name} 上场投掷` : '本场比赛投掷结束') : '给它一次飞行'}</h2><p>${activeSheet.name} · ${activeGsm} gsm · ${paperGrade(activeGrade).name} · ${activePlaneDef.name}</p></div><div class="flight-head-tools"><button type="button" id="toggle-camera" class="${followCamera ? 'selected' : ''}" aria-pressed="${followCamera}">${followCamera ? '跟随相机：开' : '跟随相机：关'}</button>${!isOfficialActive ? '<button id="change">换纸重折</button>' : ''}</div></div>${!isOfficialActive ? `<div class="mode-switch"><button type="button" id="mode-free" class="selected" aria-pressed="true">自由实验模式</button><button type="button" id="mode-comp">正式比赛模式（1–4 人）</button></div>` : ''}${compBannerHtml}${!isOfficialActive && legacyMessage ? `<p class="legacy-share" role="status">${legacyMessage}</p>` : ''}${sharedMessage ? `<p class="shared-result">${sharedMessage}</p>` : ''}<div class="canvas-wrap"><canvas id="flight" class="${!flight ? 'interactive-fold' : ''}" width="960" height="600" aria-label="飞行轨迹与试飞场"></canvas><div class="confetti" aria-hidden="true">${Array.from({length: 24}, (_, i) => `<i style="--x:${(i * 41) % 100}%;--delay:${(i % 6) * 0.08}s;--colour:${['var(--paper)', 'var(--mark-red)', 'var(--ink)'][i % 3]}"></i>`).join('')}</div></div><p class="ghost-note">${isOfficialActive ? '正式比赛已隐藏落地预演虚线：在画布上向后下方拖动蓄力，松手即投掷。' : '在画布上向后下方拖动蓄力，松手即投掷；下方滑块可供精确实验微调。'}</p>${!isOfficialActive ? `<div class="challenge"><span>选择挑战</span><button id="distance-challenge" class="${challenge === 'distance' ? 'selected' : ''}" aria-pressed="${challenge === 'distance'}">距离赛 · 88.3 m 里程碑 / 98.4 m WR</button><button id="duration-challenge" class="${challenge === 'duration' ? 'selected' : ''}" aria-pressed="${challenge === 'duration'}">滞空赛 · 29.2 s 里程碑 / 31.2 s WR</button><p id="challenge-result">${flight ? '挑战结算将在落地后显示' : '调整投掷，挑战历史里程碑与世界纪录'}</p></div>` : `<p id="challenge-result" class="ghost-note">${compLastRecord ? (compLastRecord.valid ? `本投有效成绩：${compLastRecord.score!.toFixed(2)} ${activeMatch!.event === 'distance' ? 'm' : 's'}` : `本投无效：${compLastRecord.invalidReason}`) : '请拖动蓄力或调整角度与力度后投掷'}</p>`}<div class="flight-status">${flight ? '试飞完成' : '准备起飞 · 拖动蓄力或调整滑块'} <span class="mono">${isOfficialActive ? (activeTurn ? `第 ${activeTurn.round}/${activeMatch!.rounds} 轮` : `全部 ${activeMatch!.rounds} 轮完成`) : `个人最佳 ${bestLabel()}`}</span></div><div class="results" aria-live="polite"><div><small>飞行距离</small><strong>${flight ? flight.distance.toFixed(1) : '—'} <em>m</em></strong></div><div><small>滞空时间</small><strong>${flight ? flight.duration.toFixed(1) : '—'} <em>s</em></strong></div><div><small>最高高度</small><strong>${flight ? flight.height.toFixed(1) : '—'} <em>m</em></strong></div></div>${liveStandingsHtml}<div class="controls">${slider('angle', '投掷角度', 0, 75, angle, '°')}${slider('speed', '投掷力度', 6, 28, speed, ' m/s')}${isOfficialActive ? `<label><span>本轮锁定风速 <b class="mono">${activeWind >= 0 ? '+' : ''}${activeWind.toFixed(1)} m/s</b></span><input id="wind" type="range" min="-4" max="4" step="0.5" value="${activeWind}" disabled></label>` : slider('wind', '风速', -4, 4, wind, ' m/s')}</div>${!isOfficialActive ? `<div class="wind-presets"><span>风场速设：</span>${[-3, 0, 3].map(w => `<button type="button" class="wind-preset ${wind === w ? 'selected' : ''}" data-wind="${w}">${w < 0 ? `逆风 ${w}` : w === 0 ? '无风 0' : `顺风 +${w}`} m/s</button>`).join('')}</div><div class="recommendation"><p><b>投掷起点：</b>${activePlaneDef.recommendation.note}</p><button id="apply-recommendation">采用建议角度与力度</button></div>` : ''}<div class="actions"><span>${isOfficialActive ? '正式赛同场环境已锁定' : '虚线为预演轨迹 · 正风速为顺风'}</span>${!isOfficialActive ? '<button id="share">分享这次配置</button>' : ''}${flight ? `<button id="pause-flight">${flightPaused ? '继续飞行' : '暂停'}</button><button id="slow-replay">慢动作回放 0.4×</button>` : ''}${nextTurnActionHtml}</div><details class="physics aero-deep-panel"><summary>高级分析：受力矢量、极曲线、轨迹诊断与几何参数</summary><div class="flight-head-tools" style="margin:10px 0"><button type="button" id="toggle-forces" class="${showForces ? 'selected' : ''}" aria-pressed="${showForces}">${showForces ? '受力矢量：开' : '受力矢量：关'}</button><button type="button" id="toggle-polar" class="${showPolar ? 'selected' : ''}" aria-pressed="${showPolar}">${showPolar ? '极曲线图：开' : '极曲线图：关'}</button></div><div class="flight-diagnostic" id="flight-diagnostic"><div class="diag-head"><span class="mono diag-regime">${analysis.regimeLabel}</span>${analysis.comparison ? `<span class="mono diag-compare">${analysis.comparison.summary}</span>` : ''}</div><p id="diag-verdict">${analysis.verdict}</p></div><div id="aero-deep-content">${renderAeroDeepHtml(flight ?? preview, aero, {angle, speed, wind: activeWind}, activePlaneId)}</div><div class="physics-grid" style="margin-top:12px"><span>材质 <b class="mono">${paperGrade(activeGrade).name}</b></span><span>厚度 <b class="mono">${(materialProfile(activeGrade, activeGsm).thickness * 1e6).toFixed(0)} µm</b></span><span>折痕利落度 <b class="mono">${(materialProfile(activeGrade, activeGsm).creaseCrispness * 100).toFixed(0)}%<small>（经验代理）</small></b></span><span>质量 <b class="mono">${(aero.mass * 1000).toFixed(2)} g</b></span><span>翼展 <b class="mono">${(aero.span * 100).toFixed(1)} cm</b></span><span>翼面积 <b class="mono">${(aero.wingArea * 10000).toFixed(0)} cm²</b></span><span>展弦比 <b class="mono">${aero.aspectRatio.toFixed(2)}</b></span><span>重心（距机头） <b class="mono">${((aero.cg.y - aero.noseY) * 100).toFixed(1)} cm</b></span><span>静稳定余量 <b class="mono">${(metrics.staticMargin * 100).toFixed(1)}%</b></span><span>翼载荷 <b class="mono">${metrics.wingLoading.toFixed(2)} N/m²</b></span><span>龙骨深度 <b class="mono">${(metrics.keelDepth * 100).toFixed(1)} cm</b></span><span>基准滑翔速 <b class="mono">${metrics.nominalGlideSpeed.toFixed(1)} m/s</b></span></div></details></section>`,
+    `<section><div class="section-head"><div><p class="eyebrow">02 / 飞行赛场${isOfficialActive ? ' · 正式比赛' : ''}</p><h2>${isOfficialActive ? (activeTurn ? `${activeTurn.player.name} 上场投掷` : '本场比赛投掷结束') : '给它一次飞行'}</h2><p>${activeSheet.name} · ${activeGsm} gsm · ${paperGrade(activeGrade).name} · ${activePlaneDef.name}</p></div><div class="flight-head-tools"><button type="button" id="toggle-camera" class="${followCamera ? 'selected' : ''}" aria-pressed="${followCamera}">${followCamera ? '跟随相机：开' : '跟随相机：关'}</button>${!isOfficialActive ? '<button id="change">换纸重折</button>' : ''}</div></div>${!isOfficialActive ? `<div class="mode-switch"><button type="button" id="mode-free" class="selected" aria-pressed="true">自由实验模式</button><button type="button" id="mode-comp">正式比赛模式（1–4 人）</button></div>` : ''}${compBannerHtml}${!isOfficialActive && legacyMessage ? `<p class="legacy-share" role="status">${legacyMessage}</p>` : ''}${sharedMessage ? `<p class="shared-result">${sharedMessage}</p>` : ''}<div class="canvas-wrap"><canvas id="flight" class="${!flight ? 'interactive-fold' : ''}" width="960" height="600" aria-label="飞行轨迹与试飞场"></canvas><div class="confetti" aria-hidden="true">${Array.from({length: 24}, (_, i) => `<i style="--x:${(i * 41) % 100}%;--delay:${(i % 6) * 0.08}s;--colour:${['var(--paper)', 'var(--mark-red)', 'var(--ink)'][i % 3]}"></i>`).join('')}</div></div><p class="ghost-note">${isOfficialActive ? '正式比赛已隐藏落地预演虚线：在画布上向后下方拖动蓄力，松手即投掷。' : '在画布上向后下方拖动蓄力，松手即投掷；下方滑块可供精确实验微调。'}</p>${!isOfficialActive ? `<div class="challenge"><span>选择挑战</span><button id="distance-challenge" class="${challenge === 'distance' ? 'selected' : ''}" aria-pressed="${challenge === 'distance'}">距离赛 · 88.3 m 里程碑 / 98.4 m WR</button><button id="duration-challenge" class="${challenge === 'duration' ? 'selected' : ''}" aria-pressed="${challenge === 'duration'}">滞空赛 · 29.2 s 里程碑 / 31.2 s WR</button><p id="challenge-result">${flight ? '挑战结算将在落地后显示' : '调整投掷，挑战历史里程碑与世界纪录'}</p></div>` : `<p id="challenge-result" class="ghost-note">${compLastRecord ? (compLastRecord.valid ? `本投有效成绩：${compLastRecord.score!.toFixed(2)} ${activeMatch!.event === 'distance' ? 'm' : 's'}` : `本投无效：${compLastRecord.invalidReason}`) : '请拖动蓄力或调整角度与力度后投掷'}</p>`}<div class="flight-status">${flight ? '试飞完成' : '准备起飞 · 拖动蓄力或调整滑块'} <span class="mono">${isOfficialActive ? (activeTurn ? `第 ${activeTurn.round}/${activeMatch!.rounds} 轮` : `全部 ${activeMatch!.rounds} 轮完成`) : `个人最佳 ${bestLabel()}`}</span></div><div class="results" aria-live="polite"><div><small>飞行距离</small><strong>${flight ? flight.distance.toFixed(1) : '—'} <em>m</em></strong></div><div><small>滞空时间</small><strong>${flight ? flight.duration.toFixed(1) : '—'} <em>s</em></strong></div><div><small>最高高度</small><strong>${flight ? flight.height.toFixed(1) : '—'} <em>m</em></strong></div></div>${liveStandingsHtml}<div class="controls">${slider('angle', '投掷角度', 0, 75, angle, '°')}${slider('speed', '投掷力度', 6, 28, speed, ' m/s')}${isOfficialActive ? `<label><span>本轮锁定风速 <b class="mono">${activeWind >= 0 ? '+' : ''}${activeWind.toFixed(1)} m/s</b></span><input id="wind" type="range" min="-4" max="4" step="0.5" value="${activeWind}" disabled></label>` : slider('wind', '风速', -4, 4, wind, ' m/s')}</div>${!isOfficialActive ? `<div class="wind-presets"><span>风场速设：</span>${[-3, 0, 3].map(w => `<button type="button" class="wind-preset ${wind === w ? 'selected' : ''}" data-wind="${w}">${w < 0 ? `逆风 ${w}` : w === 0 ? '无风 0' : `顺风 +${w}`} m/s</button>`).join('')}</div><div class="recommendation"><p><b>投掷起点：</b>${activePlaneDef.recommendation.note}</p><button id="apply-recommendation">采用建议角度与力度</button></div>` : ''}<div class="actions"><span>${isOfficialActive ? '正式赛同场环境已锁定' : '虚线为预演轨迹 · 正风速为顺风'}</span>${!isOfficialActive ? '<button id="share">分享这次配置</button>' : ''}${flight ? `<button id="pause-flight">${flightPaused ? '继续飞行' : '暂停'}</button><button id="slow-replay">慢动作回放 0.4×</button>` : ''}${nextTurnActionHtml}</div><details class="physics aero-deep-panel"><summary>高级分析：受力矢量、极曲线、轨迹诊断与几何参数</summary><div class="flight-head-tools" style="margin:10px 0"><button type="button" id="toggle-forces" class="${showForces ? 'selected' : ''}" aria-pressed="${showForces}">${showForces ? '受力矢量：开' : '受力矢量：关'}</button><button type="button" id="toggle-polar" class="${showPolar ? 'selected' : ''}" aria-pressed="${showPolar}">${showPolar ? '极曲线图：开' : '极曲线图：关'}</button></div><div class="flight-diagnostic" id="flight-diagnostic"><div class="diag-head"><span class="mono diag-regime">${analysis.regimeLabel}</span>${analysis.comparison ? `<span class="mono diag-compare">${analysis.comparison.summary}</span>` : ''}</div><p id="diag-verdict">${analysis.verdict}</p></div><div id="aero-deep-content">${renderAeroDeepHtml(flight ?? preview, aero, {angle, speed, wind: activeWind}, activePlaneId)}</div><div class="physics-grid" style="margin-top:12px"><span>材质 <b class="mono">${paperGrade(activeGrade).name}</b></span><span>厚度 <b class="mono">${(materialProfile(activeGrade, activeGsm).thickness * 1e6).toFixed(0)} µm</b></span><span>折痕利落度 <b class="mono">${(materialProfile(activeGrade, activeGsm).creaseCrispness * 100).toFixed(0)}%<small>（经验代理）</small></b></span><span>折痕质量 <b class="mono">${(foldQuality * 100).toFixed(0)}%</b></span><span>质量 <b class="mono">${(aero.mass * 1000).toFixed(2)} g</b></span><span>翼展 <b class="mono">${(aero.span * 100).toFixed(1)} cm</b></span><span>翼面积 <b class="mono">${(aero.wingArea * 10000).toFixed(0)} cm²</b></span><span>展弦比 <b class="mono">${aero.aspectRatio.toFixed(2)}</b></span><span>重心（距机头） <b class="mono">${((aero.cg.y - aero.noseY) * 100).toFixed(1)} cm</b></span><span>静稳定余量 <b class="mono">${(metrics.staticMargin * 100).toFixed(1)}%</b></span><span>翼载荷 <b class="mono">${metrics.wingLoading.toFixed(2)} N/m²</b></span><span>龙骨深度 <b class="mono">${(metrics.keelDepth * 100).toFixed(1)} cm</b></span><span>基准滑翔速 <b class="mono">${metrics.nominalGlideSpeed.toFixed(1)} m/s</b></span></div></details></section>`,
   );
   drawFlight(preview, flight, aero, activeWind, activeChallenge, isOfficialActive);
 
@@ -775,7 +789,7 @@ function render() {
     playbackRate = 1;
     if (flight) previousFlight = flight;
     activeGhost = isOfficialActive ? null : getGhost(challenge);
-    preview = simulate(aero, {angle, speed, wind: activeWind});
+    preview = simulate(aero, {angle, speed, wind: activeWind}, options);
     flight = preview;
     playStart = performance.now();
     render();
@@ -823,7 +837,7 @@ function render() {
     if (res.ready) {
       angle = res.angle;
       speed = res.speed;
-      preview = simulate(aero, {angle, speed, wind: activeWind});
+      preview = simulate(aero, {angle, speed, wind: activeWind}, options);
       const angleInput = document.querySelector<HTMLInputElement>('#angle');
       const speedInput = document.querySelector<HTMLInputElement>('#speed');
       if (angleInput) {
@@ -1000,7 +1014,7 @@ function render() {
       if (launch && !isOfficialActive) launch.textContent = '投掷纸飞机 →';
       const share = document.querySelector<HTMLButtonElement>('#share');
       if (share) share.textContent = '分享这次配置';
-      preview = simulate(aero, {angle, speed, wind: activeWind});
+      preview = simulate(aero, {angle, speed, wind: activeWind}, options);
       const liveAnalysis = analyzeFlight(preview, aero, {angle, speed, wind: activeWind}, previousFlight);
       const diagRegime = document.querySelector('.diag-regime');
       if (diagRegime) diagRegime.textContent = liveAnalysis.regimeLabel;
@@ -1122,6 +1136,8 @@ function advance() {
       animation = requestAnimationFrame(tick);
     } else {
       sound.fold();
+      // 自动演示/按钮推进的子操作按设计完成,计满分(v4 折痕质量通道)。
+      foldScores.set(`${foldHistory.cursor.step}:${foldHistory.cursor.subOp}`, 1);
       const targetCursor = animateSingleSubOp
         ? nextCursor(foldHistory.cursor, program)
         : {step: foldHistory.cursor.step + 1, subOp: 0};

@@ -38,9 +38,11 @@ export function skinFrictionCoefficient(a:Aero,speed:number):number {
  return (wingWetted*cf(a.frictionChord)+bodyDrag)/a.wingArea;
 }
 /** Simplified distributed-lift moment about the mass centre; y increases aft. */
-export function pitchAcceleration(alpha:number,omega:number,speed:number,a:Aero,dragModel:'empirical'|'skin-friction'='empirical',heightMoment=false):number {
+export function pitchAcceleration(alpha:number,omega:number,speed:number,a:Aero,dragModel:'empirical'|'skin-friction'='empirical',heightMoment=false,forceScale:{lift:number;drag:number}={lift:1,drag:1}):number {
  if(speed<=1e-6)return 0;
  const {cl,cd}=coefficients(alpha,a,speed,dragModel), slope=2*Math.PI*a.aspectRatio/(a.aspectRatio+2);
+ // v4:折痕质量通道同时缩放平动与力矩使用的升力/阻力,保持力偶一致性。
+ const clE=cl*forceScale.lift,cdE=cd*forceScale.drag;
  // In the attached-flow limit use the quarter-chord focus; as flow becomes
  // broadside, move the effective pressure centre toward the wing-area centre.
  // This interpolation is an approximation, not a measured pressure curve.
@@ -50,11 +52,11 @@ export function pitchAcceleration(alpha:number,omega:number,speed:number,a:Aero,
  // Local rotational velocity changes incidence across the wing. Integrating
  // the squared distance to the mass centre gives the damping arm directly.
  const dampingArm=a.wingPitchSecondMoment;
- const normal=cl*Math.cos(alpha)+cd*Math.sin(alpha);
+ const normal=clE*Math.cos(alpha)+cdE*Math.sin(alpha);
  // Research option only: treats the entire resultant as acting in the wing
  // plane. The force distribution is unknown and this fails convergence for
  // some launches, so gameplay leaves it disabled.
- const axial=cd*Math.cos(alpha)-cl*Math.sin(alpha);
+ const axial=cdE*Math.cos(alpha)-clE*Math.sin(alpha);
  const moment=dynamicPressure*(-normal*lever-slope*omega*dampingArm/speed+(heightMoment?axial*a.cgDepth:0));
  return moment/a.pitchInertia;
 }
