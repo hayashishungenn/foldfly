@@ -246,6 +246,37 @@ function shell(content: string) {
   };
 }
 
+/** 单机型本机个人最佳(距离/滞空,来自本地幽灵存档)。 */
+function planeBest(planeId: PlaneId): {distance: number | null; duration: number | null} {
+  const out: {distance: number | null; duration: number | null} = {distance: null, duration: null};
+  for (const mode of ['distance', 'duration'] as const) {
+    try {
+      const raw = localStorage.getItem(ghostStorageKey(planeId, mode));
+      const flight = raw ? decodeGhost(raw, mode) : null;
+      if (flight) out[mode] = mode === 'distance' ? flight.distance : flight.duration;
+    } catch {}
+  }
+  return out;
+}
+
+/** 图鉴详情:折序列表 + 纸张克重×成绩对照(当前材质)+ 本机 PB。 */
+function renderPlaneDetail(planeId: PlaneId, gsmValue: (typeof weights)[number]): string {
+  const def = planes[planeId];
+  const best = planeBest(planeId);
+  const rows = weights
+    .map(w => {
+      try {
+        const a = extract(replay(papers[0], def.steps.length, def.steps), w);
+        const f = simulate(a, {angle: def.recommendation.angle, speed: def.recommendation.speed, wind: 0});
+        return `<tr><td class="mono">A4 · ${w}g</td><td class="mono">${f.landed ? f.distance.toFixed(1) + ' m' : '未落地'}</td><td class="mono">${f.landed ? f.duration.toFixed(1) + ' s' : '—'}</td></tr>`;
+      } catch {
+        return `<tr><td class="mono">A4 · ${w}g</td><td colspan="2" class="mono">折序无法完成</td></tr>`;
+      }
+    })
+    .join('');
+  return `<details class="plane-detail"><summary>详情 · 折序清单与克重对照</summary><ol class="plane-steps">${def.steps.map(st => `<li>${st.title}</li>`).join('')}</ol><table class="detail-table"><thead><tr><th>纸张（${paperGrade(grade).name}）</th><th>距离</th><th>滞空</th></tr></thead><tbody>${rows}</tbody></table><p class="mono detail-pb">本机最佳：${best.distance !== null ? `距离 ${best.distance.toFixed(1)} m` : '距离 —'} · ${best.duration !== null ? `滞空 ${best.duration.toFixed(1)} s` : '滞空 —'} <small>（对照为示例投掷 ${def.recommendation.angle}°/${def.recommendation.speed} m/s，非实测纪录条件）</small></p></details>`;
+}
+
 function render() {
   cancelAnimationFrame(animation);
   if (stage === 'paper') {
@@ -256,7 +287,7 @@ function render() {
         const aero = extract(folded, gsm);
         const m = aeroMetrics(aero);
         const svg = renderPlaneBlueprintSvg(activeSheet, p.steps, gsm);
-        return `<button class="plane-choice ${plane === p.id ? 'selected' : ''}" data-plane="${p.id}" aria-pressed="${plane === p.id}">
+        return `<div class="plane-block"><button class="plane-choice ${plane === p.id ? 'selected' : ''}" data-plane="${p.id}" aria-pressed="${plane === p.id}">
           <div class="plane-choice-top">
             ${svg}
             <div class="plane-choice-copy">
@@ -270,7 +301,7 @@ function render() {
             <span>AR ${aero.aspectRatio.toFixed(2)}</span>
             <span>SM ${(m.staticMargin * 100).toFixed(0)}%</span>
           </div>
-        </button>`;
+        </button>${renderPlaneDetail(p.id, gsm)}</div>`;
       })
       .join('');
 
@@ -1470,6 +1501,10 @@ const DESIGNER_TRIM_NOTES: Record<PlaneId, {source: string; trim: string}> = {
   nakamura: {
     source: '中村英二（Eiji Nakamura）& 红牛纸飞机世界锦标赛（Red Bull Paper Wings）',
     trim: '独特的倒三角锁扣（The Lock）牢固锁定两侧翼层，机翼自平稳能力极强；两翼轻微上抬赋予 4°–6° 上反角，后缘保持平整，以 15° 仰角中速轻快送出，可画出优雅平直的自稳滑翔弹道。',
+  },
+  zerofighter: {
+    source: '户田拓夫 (Takuo Toda · Oriplane 公开教学 · 工程近似)',
+    trim: '零战与 Sky King 同源:更浅的机头带让配重更靠前、静稳定余量更低,配合稍短的展弦比。调校要点是赋予双翼明显正上反角(约 6°–8°)与后缘柔和微翘,以约 20° 仰角轻柔送出(~8 m/s),让宽弦机翼在顶点平缓进入低沉降率滑翔;原机锁扣结构在本作中简化。',
   },
   blackburn: {
     source: 'Ken Blackburn《The World Record Paper Airplane Book》',

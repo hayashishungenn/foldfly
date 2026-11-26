@@ -53,6 +53,14 @@ button:disabled{opacity:.45;cursor:default}
 .actions>span:first-child{color:var(--pencil);margin-right:auto}
 .spacer{flex:1}
 .canvas-wrap{border:1.5px solid var(--ink);border-radius:7px;overflow:hidden;background:var(--paper);position:relative}
+.plane-block{display:flex;flex-direction:column;gap:0}
+.plane-block .plane-choice{flex:1}
+.plane-detail{border:1px dashed var(--grid-line);border-top:none;border-radius:0 0 7px 7px;padding:10px 16px;background:rgba(201,220,235,.14);font-size:13px}
+.plane-detail summary{cursor:pointer;color:var(--pencil)}
+.plane-steps{margin:8px 0;padding-left:20px;color:var(--ink)}
+.detail-table{width:100%;border-collapse:collapse;margin:6px 0}
+.detail-table th,.detail-table td{border-bottom:1px solid var(--grid-line);padding:4px 6px;text-align:left;font-size:12px}
+.detail-pb{color:var(--pencil);margin:4px 0 0}
 .canvas-wrap canvas{display:block;width:100%;height:auto}
 .canvas-wrap canvas.hidden-canvas{display:none}
 #flight3d{height:600px;touch-action:none}

@@ -4,6 +4,7 @@ import {mach5} from './mach5';
 import {skyKing} from './skyking';
 import {nakamura} from './nakamura';
 import {blackburn} from './blackburn';
+import {zeroFighter} from './zerofighter';
 
 export const planes = {
   dart: {
@@ -40,6 +41,13 @@ export const planes = {
     steps: nakamura,
     description: '中村英二发明的经典锁头滑翔机；红牛纸飞机大赛（Red Bull Paper Wings）常客，倒三角锁扣造就绝佳自稳定性。',
     recommendation: {angle: 15, speed: 12, note: '选用 A4 80g 纸张，以 15° 仰角中速平顺送出，微调两翼微弱上反角可实现优雅自稳滑翔。'},
+  },
+  zerofighter: {
+    id: 'zerofighter',
+    name: 'Zero Fighter（工程近似）',
+    steps: zeroFighter,
+    description: '户田拓夫 2010 年滞空历史里程碑机型（29.2 s）的工程近似折序（原机教学公开、锁扣简化）；高机头带配重、宽弦机翼、极低翼载荷。',
+    recommendation: {angle: 20, speed: 8, note: '选用 A4 80g 纸张，以约 20° 仰角轻柔抛出，让宽弦机翼在顶点进入低沉降率滑翔。'},
   },
   blackburn: {
     id: 'blackburn',
@@ -111,6 +119,21 @@ export const archives = [
     strategy: '微调机翼正上反角，以 15° 仰角平顺投出，在室内和室外均能保持极佳抗侧风与自平稳滑翔姿态。',
     source: 'https://www.redbull.com/int-en/events/red-bull-paper-wings',
     sourceLabel: '红牛大赛官方介绍',
+  },
+  {
+    id: 'zerofighter' as const,
+    name: 'Zero Fighter（工程近似）',
+    badge: '★ 滞空里程碑 · 2010',
+    record: '29.2 s · 2010（现役 WR 31.2 s）',
+    score: '29.2 s',
+    recommendedPaper: 'A4 80g',
+    optimalAngle: '~20° · 8 m/s',
+    preset: {plane: 'zerofighter' as const, paper: 'a4' as const, gsm: 80 as const, angle: 20, speed: 8, challenge: 'duration' as const},
+    designer: '户田拓夫（Takuo Toda）',
+    story: '2010 年户田拓夫以 Zero Fighter 创下 29.2 秒滞空历史里程碑（区别于 2009 年 Sky King 的 27.9 秒；现役世界纪录为 2026 年 31.2 秒）。原机由户田拓夫通过 Oriplane 频道公开教学；本作折序为工程近似，原机锁扣结构简化。',
+    strategy: '选用 A4 80 gsm 纸张，以约 20° 仰角轻柔抛出，浅机头带让配重更靠前，宽弦机翼在顶点进入低沉降率滑翔。',
+    source: 'https://paperace.com/takuo-toda/',
+    sourceLabel: '设计者故事',
   },
   {
     id: 'blackburn' as const,

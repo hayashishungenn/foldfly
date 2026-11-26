@@ -43,8 +43,11 @@ describe('校准报告与历史锚点验证', () => {
     expect(sky.result!.duration).toBeGreaterThan(25);
     expect(sky.result!.duration).toBeLessThan(33);
 
-    // Unimplemented reference plane remains null
-    expect(zero.result).toBeNull();
+    // Zero Fighter(Phase 06 补齐几何):29.2 s 历史里程碑的校准区间
+    expect(zero.target).toBe(29.2);
+    expect(zero.result?.landed).toBe(true);
+    expect(zero.result!.duration).toBeGreaterThan(25);
+    expect(zero.result!.duration).toBeLessThan(33);
   });
 
   it('满足 M2 机型分化验收：40° 强投下 Mach 5 显著远于 Suzanne，轻投下 Sky King 滞空显著最长，且 A4 优于 US Letter', () => {
@@ -110,8 +113,8 @@ it('参数扫描从实际飞行结果中选出最大距离和滞空', async () =
 it('步长对照覆盖已有机型并跳过缺失几何', async () => {
   const {convergenceReport} = await import('../src/aero/calibrate');
   const rows = convergenceReport();
-  expect(rows).toHaveLength(10);
-  expect(new Set(rows.map(r => r.id))).toEqual(new Set(['dart', 'suzanne', 'mach5', 'skyking']));
+  expect(rows).toHaveLength(12);
+  expect(new Set(rows.map(r => r.id))).toEqual(new Set(['dart', 'suzanne', 'mach5', 'skyking', 'zerofighter']));
   for (const row of rows) {
     expect(row.values).toHaveLength(3);
     expect(row.values.every(v => Number.isFinite(v))).toBe(true);

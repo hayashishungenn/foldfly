@@ -92,6 +92,6 @@ describe('Mach 5 折序与气动特征', () => {
     expect(layerFillColor(false, 1)).toBe('rgb(230, 226, 219)');
 
     // Historical records provide valid one-click presets
-    expect(archives.map(a => a.preset.plane)).toEqual(['suzanne', 'mach5', 'skyking', 'nakamura', 'blackburn']);
+    expect(archives.map(a => a.preset.plane)).toEqual(['suzanne', 'mach5', 'skyking', 'nakamura', 'zerofighter', 'blackburn']);
   });
 });
