@@ -215,6 +215,22 @@ function saveCompetitionPbIfBetter(match: CompetitionMatch): boolean {
   return true;
 }
 
+/** 游戏阶段(治理 1.8):进入条件与出口清理集中于此,禁止散落赋值。 */
+type Stage = 'paper' | 'fold' | 'design' | 'career' | 'flight' | 'settlement';
+function gotoStage(next: Stage, renderNow = true) {
+  // 统一出口清理:终止动画链与风声,复位瞬态交互状态
+  cancelAnimationFrame(animation);
+  auto = false;
+  animating = false;
+  flightPaused = false;
+  pausedElapsed = 0;
+  chargeState = null;
+  sound.wind(0);
+  // 上一投回看与成绩提交标志属于比赛流程,由比赛控制器显式管理,不在此清
+  stage = next;
+  if (renderNow) render();
+}
+
 const currentPlane = () => planes[plane];
 /** v4 模拟选项:材质定形通道 + 折痕质量通道(正式比赛用预设折序 = 完美折痕)。 */
 function simOptions(gradeId: PaperGradeId, gsmValue: number, quality: number): SimulationOptions {
@@ -247,7 +263,7 @@ const invalidDesign = location.hash.startsWith('#design=') && !sharedDesign;
 if (sharedDesign) {
   design = sharedDesign;
   paper = Math.max(0, papers.findIndex(p => p.id === sharedDesign.sheet));
-  stage = 'design';
+  stage = 'design'; // 启动初始化:gotoStage 的清理逻辑尚无意义且 render() 由底部统一调用
 }
 
 const shared = decodeFlight(location.hash);
@@ -262,7 +278,7 @@ if (shared) {
   wind = shared.wind;
   plane = shared.plane;
   step = currentPlane().steps.length;
-  stage = 'flight';
+  gotoStage('flight');
   challenge = shared.challenge ?? 'distance';
 }
 
@@ -459,7 +475,7 @@ function render() {
         }),
     );
     document.querySelector<HTMLButtonElement>('#start')!.onclick = () => {
-      stage = 'fold';
+      gotoStage('fold');
       foldHistory = createFoldHistory(0, 0);
       foldScores = new Map();
       step = 0;
@@ -470,7 +486,7 @@ function render() {
       render();
     };
     document.querySelector<HTMLButtonElement>('#career-start')!.onclick = () => {
-      stage = 'career';
+      gotoStage('career');
       render();
     };
     document.querySelector<HTMLButtonElement>('#design-start')!.onclick = () => {
@@ -480,7 +496,7 @@ function render() {
       designKind = 'valley';
       designLayer = 'all';
       designOpen = false;
-      stage = 'design';
+      gotoStage('design');
       render();
     };
     return;
@@ -507,7 +523,7 @@ function render() {
       `<section><div class="section-head"><div><p class="eyebrow">单人生涯</p><h2>从童年回忆到纪录殿堂</h2><p>按顺序挑战 ${careerChallenges.length} 个关卡;每关锁定纸张与风况,精准赛开放角度与力度供你调整。${progress.done > 0 ? `已完成 ${progress.done}/${progress.total}。` : ''}</p></div><div class="flight-head-tools"><button id="career-back">← 返回选纸</button>${progress.done > 0 ? '<button id="career-reset">重置生涯</button>' : ''}</div></div>${careerNeedsReset ? '<p role="status">检测到不兼容的旧版生涯存档,已完成进度不可读;请重置后重新开始。</p>' : ''}${careerSaveFailed ? '<p role="alert">⚠ 本次进度未能写入本地存储(隐私模式或空间不足)——当前会话内进度仍有效,但刷新后将丢失。</p>' : ''}<div class="career-grid">${cards}</div>${renderRecordsWall()}</section>`,
     );
     document.querySelector<HTMLButtonElement>('#career-back')!.onclick = () => {
-      stage = 'paper';
+      gotoStage('paper');
       render();
     };
     const resetBtn = document.querySelector<HTMLButtonElement>('#career-reset');
@@ -538,7 +554,7 @@ function render() {
           previousFlight = null;
           flightDesign = null;
           foldScores = new Map();
-          stage = 'flight';
+          gotoStage('flight');
           render();
         }),
     );
@@ -645,7 +661,7 @@ function render() {
       );
     };
     document.querySelector<HTMLButtonElement>('#design-back')!.onclick = () => {
-      stage = 'paper';
+      gotoStage('paper');
       designPending = null;
       render();
     };
@@ -655,7 +671,7 @@ function render() {
       foldScores = new Map();
       flight = null;
       previousFlight = null;
-      stage = 'flight';
+      gotoStage('flight');
       render();
     };
     return;
@@ -844,7 +860,7 @@ function render() {
     document.querySelector<HTMLButtonElement>('#next')!.onclick = () => {
       if (step === n) {
         auto = false;
-        stage = 'flight';
+        gotoStage('flight');
         render();
       } else {
         foldViewMode = 'folded';
@@ -922,7 +938,7 @@ function render() {
       compNewPb = false;
       flight = null;
       flightMode = 'competition';
-      stage = 'flight';
+      gotoStage('flight');
       render();
     };
     document.querySelector<HTMLButtonElement>('#comp-rematch')!.onclick = startRematch;
@@ -933,20 +949,20 @@ function render() {
       compThrowRecorded = false;
       flight = null;
       flightMode = 'competition';
-      stage = 'flight';
+      gotoStage('flight');
       render();
     };
     document.querySelector<HTMLButtonElement>('#comp-back-free')!.onclick = () => {
       flightMode = 'free';
       activeMatch = null;
       flight = null;
-      stage = 'flight';
+      gotoStage('flight');
       render();
     };
     document.querySelector<HTMLButtonElement>('#comp-go-workshop')!.onclick = () => {
       activeMatch = null;
       flight = null;
-      stage = 'paper';
+      gotoStage('paper');
       render();
     };
     return;
@@ -1019,7 +1035,7 @@ function render() {
       render();
     };
     document.querySelector<HTMLButtonElement>('#change')!.onclick = () => {
-      stage = 'paper';
+      gotoStage('paper');
       render();
     };
     document.querySelector<HTMLButtonElement>('#comp-ev-distance')!.onclick = () => {
@@ -1275,7 +1291,7 @@ function render() {
       compLastRecord = null;
       compThrowRecorded = false;
       if (activeMatch.status === 'finished') {
-        stage = 'settlement';
+        gotoStage('settlement');
       } else {
         const nextT = currentTurn(activeMatch);
         if (nextT) {
@@ -1294,7 +1310,7 @@ function render() {
       careerActive = null;
       flight = null;
       previousFlight = null;
-      stage = 'career';
+      gotoStage('career');
       render();
     };
   }
@@ -1304,7 +1320,7 @@ function render() {
       sound.wind(0);
       flight = null;
       previousFlight = null;
-      stage = 'design';
+      gotoStage('design');
       render();
     };
   }
@@ -1538,7 +1554,7 @@ function render() {
       legacyMessage = '';
       flight = null;
       previousFlight = null;
-      stage = 'paper';
+      gotoStage('paper');
       render();
     };
   }
@@ -1776,6 +1792,18 @@ function drawFlight(
     }
   }
 }
+
+// 治理 1.10:页面转入后台时暂停飞行回放并停风声;恢复后保持暂停由玩家继续
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden && stage === 'flight' && flight && !flightPaused && !reduced.matches) {
+    pausedElapsed = currentElapsed(flight);
+    flightPaused = true;
+    cancelAnimationFrame(animation);
+    sound.wind(0);
+    const btn = document.querySelector<HTMLButtonElement>('#pause-flight');
+    if (btn) btn.textContent = '继续飞行';
+  }
+});
 
 // 启动时读取生涯存档(未知版本提示重置,不静默改档)
 {

@@ -157,6 +157,8 @@ export function createFlight3DView(canvas: HTMLCanvasElement): Flight3DControlle
   canvas.addEventListener('pointerup', onUp);
   canvas.addEventListener('pointercancel', onUp);
   canvas.addEventListener('wheel', onWheel, {passive: false});
+  const onWindowResize = () => resize();
+  window.addEventListener('resize', onWindowResize);
 
   const render = () => renderer.render(scene, camera);
 
@@ -206,6 +208,7 @@ export function createFlight3DView(canvas: HTMLCanvasElement): Flight3DControlle
       canvas.removeEventListener('pointerup', onUp);
       canvas.removeEventListener('pointercancel', onUp);
       canvas.removeEventListener('wheel', onWheel);
+      window.removeEventListener('resize', onWindowResize);
       scene.traverse(obj => {
         const mesh = obj as THREE.Mesh;
         if (mesh.geometry) mesh.geometry.dispose();
