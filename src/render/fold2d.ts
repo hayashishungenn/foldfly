@@ -2,10 +2,43 @@ import {extract, aeroMetrics} from '../aero/extract';
 import {foldFrame, unfoldFrame, wingOpeningFrame} from '../fold/animate';
 import {analyzeCreaseTopology, extractCreasePattern, foldStackStats} from '../fold/crease-pattern';
 import {line, replay, type Sheet} from '../fold/engine';
-import type {Polygon} from '../fold/geometry';
+import type {Point, Polygon} from '../fold/geometry';
+import {
+  interactiveFoldFrame,
+  stateAtCursor,
+  type DragStatus,
+  type InteractiveFoldTarget,
+} from '../fold/interact';
 import type {FoldStep} from '../fold/types';
 
 export type FoldViewMode = 'folded' | 'cp';
+
+export type FoldInteractionOverlay = {
+  subOp: number;
+  manualMode: boolean;
+  showHint: boolean;
+  dragStatus: DragStatus;
+  target: InteractiveFoldTarget | null;
+};
+
+export function foldViewport(sheet: Sheet) {
+  const scale = Math.min(440 / sheet.height, 480 / sheet.width);
+  const ox = 480 - (sheet.width * scale) / 2;
+  const oy = 62;
+  return {
+    scale,
+    ox,
+    oy,
+    toSheet: (canvasX: number, canvasY: number): Point => ({
+      x: (canvasX - ox) / scale,
+      y: (canvasY - oy) / scale,
+    }),
+    toCanvas: (sheetX: number, sheetY: number): Point => ({
+      x: ox + sheetX * scale,
+      y: oy + sheetY * scale,
+    }),
+  };
+}
 
 /**
  * Darken a base paper color (--paper #FAF6EE or --paper-back #E8E2D4) by 8% per
@@ -57,13 +90,13 @@ export function renderFoldCanvas(
   progress = 0,
   gsm = 80,
   viewMode: FoldViewMode = 'folded',
+  interaction?: FoldInteractionOverlay,
 ): void {
   const c = canvas.getContext('2d')!;
-  const scale = Math.min(440 / sheet.height, 480 / sheet.width);
-  const ox = 480 - (sheet.width * scale) / 2;
-  const oy = 62;
+  const {scale, ox, oy} = foldViewport(sheet);
+  const subOp = interaction?.subOp ?? 0;
   const op = program[step];
-  const state = replay(sheet, step, program);
+  const state = stateAtCursor(sheet, program, {step, subOp});
   const stats = foldStackStats(sheet, program, step);
 
   c.clearRect(0, 0, 960, 600);
@@ -112,7 +145,14 @@ export function renderFoldCanvas(
   };
 
   if (progress > 0 && op) {
-    if (op.unfold && step > 0) {
+    if (interaction?.manualMode || subOp > 0) {
+      const parts = interactiveFoldFrame(sheet, program, {step, subOp}, progress);
+      parts.forEach((part, i) => {
+        c.globalAlpha = part.opacity;
+        polygon(part.polygon, part.back, i, Math.min(3, Math.floor(i / 2)));
+      });
+      c.globalAlpha = 1;
+    } else if (op.unfold && step > 0) {
       const base = replay(sheet, step - 1, program);
       unfoldFrame(base, sheet, program[step - 1], progress).forEach((part, i) =>
         polygon(part.polygon, part.back, i, Math.min(3, Math.floor(i / 2))),
@@ -135,6 +175,20 @@ export function renderFoldCanvas(
       const groupIdx = groups ? Math.max(0, uniqueGroups.indexOf(groups[i])) : Math.floor(i / 2);
       polygon(p, i % 2 === 1, i, groupIdx);
     });
+  }
+
+  // Soft moving-region highlight when user requests a hint or is hovering/dragging in manual mode
+  if (interaction?.manualMode && interaction.target && progress === 0 && (interaction.showHint || interaction.dragStatus === 'wrong-direction')) {
+    c.save();
+    c.fillStyle = interaction.dragStatus === 'wrong-direction' ? 'rgba(217, 72, 43, 0.14)' : 'rgba(143, 199, 232, 0.24)';
+    for (const poly of interaction.target.movingPolygons) {
+      if (poly.length < 3) continue;
+      c.beginPath();
+      poly.forEach((v, j) => (j ? c.lineTo(v.x, v.y) : c.moveTo(v.x, v.y)));
+      c.closePath();
+      c.fill();
+    }
+    c.restore();
   }
 
   // Clip each historical crease & subtle paper fiber grain (inspired by TaoweNlin/paperfold-lab)
@@ -166,10 +220,13 @@ export function renderFoldCanvas(
   }
 
   const operations = op?.operations ?? (op ? [op] : []);
-  const marker = operations.length
-    ? operations.find(o => !o.flip && progress === 0) ??
-      operations[Math.min(operations.length - 1, Math.floor(Math.max(0, Math.min(1, progress)) * operations.length))]
-    : undefined;
+  const marker = interaction?.target && !interaction.target.isFlip
+    ? interaction.target.op
+    : operations.length
+      ? operations[Math.min(operations.length - 1, subOp)] ??
+        operations.find(o => !o.flip && progress === 0) ??
+        operations[Math.min(operations.length - 1, Math.floor(Math.max(0, Math.min(1, progress)) * operations.length))]
+      : undefined;
   if (marker && !marker.flip) {
     const [a, b] = line(marker, sheet);
     const dx = b.x - a.x;
@@ -217,7 +274,95 @@ export function renderFoldCanvas(
       c.stroke();
     }
   }
+
+  // Interactive manual fold handles: grab point, drag path, and snap target
+  if (interaction?.manualMode && interaction.target && step < program.length) {
+    const t = interaction.target;
+    const accent = t.op.kind === 'mountain' ? '#D9482B' : '#1F3A5F';
+    const isSnapping = interaction.dragStatus === 'snapping';
+    const isWrong = interaction.dragStatus === 'wrong-direction';
+
+    // Dashed guide line from grab corner to target landing spot
+    c.save();
+    c.strokeStyle = isWrong ? '#D9482B' : isSnapping ? '#C9A227' : accent;
+    c.lineWidth = (interaction.showHint ? 2.4 : 1.6) / scale;
+    c.setLineDash([6 / scale, 5 / scale]);
+    c.beginPath();
+    c.moveTo(t.grabPoint.x, t.grabPoint.y);
+    c.lineTo(t.targetPoint.x, t.targetPoint.y);
+    c.stroke();
+    c.setLineDash([]);
+
+    // Snap target ring
+    const targetRadius = (isSnapping ? 13 : 10) / scale;
+    c.fillStyle = isWrong ? 'rgba(217, 72, 43, 0.16)' : isSnapping ? 'rgba(201, 162, 39, 0.25)' : 'rgba(250, 246, 238, 0.85)';
+    c.strokeStyle = isWrong ? '#D9482B' : '#C9A227';
+    c.lineWidth = (isSnapping ? 2.4 : 1.8) / scale;
+    c.beginPath();
+    c.arc(t.targetPoint.x, t.targetPoint.y, targetRadius, 0, Math.PI * 2);
+    c.fill();
+    c.stroke();
+
+    // Target crosshair dot
+    c.fillStyle = isWrong ? '#D9482B' : '#C9A227';
+    c.beginPath();
+    c.arc(t.targetPoint.x, t.targetPoint.y, 3.2 / scale, 0, Math.PI * 2);
+    c.fill();
+
+    // Draggable grab handle (only shown before snap completes)
+    if (progress < 0.98) {
+      const gx = t.grabPoint.x + (t.targetPoint.x - t.grabPoint.x) * progress;
+      const gy = t.grabPoint.y + (t.targetPoint.y - t.grabPoint.y) * progress;
+      c.fillStyle = isWrong ? 'rgba(217, 72, 43, 0.18)' : 'rgba(31, 58, 95, 0.12)';
+      c.beginPath();
+      c.arc(gx, gy, (interaction.showHint ? 18 : 14) / scale, 0, Math.PI * 2);
+      c.fill();
+
+      c.fillStyle = '#FAF6EE';
+      c.strokeStyle = isWrong ? '#D9482B' : accent;
+      c.lineWidth = 2.2 / scale;
+      c.beginPath();
+      c.arc(gx, gy, 8 / scale, 0, Math.PI * 2);
+      c.fill();
+      c.stroke();
+
+      c.fillStyle = isWrong ? '#D9482B' : accent;
+      c.beginPath();
+      c.arc(gx, gy, 3 / scale, 0, Math.PI * 2);
+      c.fill();
+    }
+    c.restore();
+  }
   c.restore();
+
+  // Bottom interactive status banner in manual mode
+  if (interaction?.manualMode && interaction.target && step < program.length) {
+    c.save();
+    const msg =
+      interaction.dragStatus === 'wrong-direction'
+        ? '方向偏了，请沿虚线指向拖动至金色目标点（松手可取消重试）'
+        : interaction.dragStatus === 'snapping'
+          ? '✓ 已进入吸附区，松手即完成本步折叠'
+          : `手动折纸：${interaction.target.hintText}`;
+    c.font = "12px 'IBM Plex Mono', monospace";
+    const textW = Math.min(680, c.measureText(msg).width + 28);
+    const bx = 480 - textW / 2;
+    const by = 554;
+    c.fillStyle = 'rgba(250, 246, 238, 0.94)';
+    c.strokeStyle =
+      interaction.dragStatus === 'wrong-direction'
+        ? '#D9482B'
+        : interaction.dragStatus === 'snapping'
+          ? '#C9A227'
+          : '#1F3A5F';
+    c.lineWidth = 1.2;
+    c.fillRect(bx, by, textW, 28);
+    c.strokeRect(bx, by, textW, 28);
+    c.fillStyle = interaction.dragStatus === 'wrong-direction' ? '#D9482B' : '#1F3A5F';
+    c.textAlign = 'center';
+    c.fillText(msg, 480, by + 18);
+    c.restore();
+  }
 
   // If the current step includes a sheet flip operation, display a clear callout badge
   if (operations.some(o => o.flip)) {

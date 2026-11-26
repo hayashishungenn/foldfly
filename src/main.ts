@@ -7,11 +7,23 @@ import './style.css';
 import {papers, weights, weightHints} from './paper/papers';
 import {planes, archives, type PlaneId} from './fold/planes';
 import {replay, FOLD_ENGINE_VERSION} from './fold/engine';
+import {
+  createFoldHistory,
+  evaluateDrag,
+  isGrabHit,
+  nextCursor,
+  pushHistory,
+  redoHistory,
+  resolveInteractiveTarget,
+  undoHistory,
+  type DragStatus,
+  type FoldHistory,
+} from './fold/interact';
 import {extract, aeroMetrics, type Aero} from './aero/extract';
 import {analyzeFlight} from './aero/diagnostics';
 import {analyzeTrajectoryPhases, computeAeroPolar, sweepLaunchAngles} from './aero/polar';
 import {simulate, FLIGHT_MODEL_VERSION, type Flight, type Throw} from './aero/integrator';
-import {renderFoldCanvas, renderPlaneBlueprintSvg, type FoldViewMode} from './render/fold2d';
+import {foldViewport, renderFoldCanvas, renderPlaneBlueprintSvg, type FoldViewMode} from './render/fold2d';
 import {renderFlightCanvas} from './render/flight2d';
 
 const app = document.querySelector<HTMLDivElement>('#app')!;
@@ -21,6 +33,11 @@ let celebrated = false;
 let paper = 0;
 let gsm: (typeof weights)[number] = 80;
 let step = 0;
+let foldHistory: FoldHistory = createFoldHistory(0, 0);
+let manualFoldMode = true;
+let foldHint = false;
+let dragStatus: DragStatus = 'idle';
+let dragProgress = 0;
 let stage: 'paper' | 'fold' | 'flight' = 'paper';
 let foldViewMode: FoldViewMode = 'folded';
 let auto = false;
@@ -204,7 +221,11 @@ function render() {
     );
     document.querySelector<HTMLButtonElement>('#start')!.onclick = () => {
       stage = 'fold';
+      foldHistory = createFoldHistory(0, 0);
       step = 0;
+      foldHint = false;
+      dragStatus = 'idle';
+      dragProgress = 0;
       foldViewMode = 'folded';
       render();
     };
@@ -214,33 +235,163 @@ function render() {
   if (stage === 'fold') {
     const program = currentPlane().steps;
     const n = program.length;
+    step = foldHistory.cursor.step;
+    const subOp = foldHistory.cursor.subOp;
     const current = program[Math.min(step, n - 1)];
+    const target = foldViewMode === 'folded' && step < n ? resolveInteractiveTarget(papers[paper], program, foldHistory.cursor) : null;
+    const canUndo = foldHistory.undoStack.length > 0 || step > 0 || subOp > 0;
+    const canRedo = foldHistory.redoStack.length > 0;
     const timelineHtml = Array.from({length: n + 1}, (_, idx) => {
       const label = idx === 0 ? '展开' : idx === n ? '完成' : `${idx}`;
       return `<button type="button" class="step-pill mono ${step === idx ? 'selected' : ''}" data-jump-step="${idx}" ${animating ? 'disabled' : ''}>${label}</button>`;
     }).join('');
+    const subBadge = target && target.subOpCount > 1 ? ` · 第 ${subOp + 1}/${target.subOpCount} 侧` : '';
 
     shell(
-      `<section><div class="section-head"><div><p class="eyebrow">02 / ${currentPlane().name}</p><h2>${step === n ? '折好了，准备试飞' : `第 ${step + 1} 步 · ${current.title}`}</h2><p>${step === n ? '轻轻压平折痕，让机翼保持对称；画布已标出重心 CG、气动焦点 AC 与龙骨剖面。' : current.description}</p></div><div class="fold-head-tools"><button type="button" id="toggle-cp" class="${foldViewMode === 'cp' ? 'selected' : ''}" aria-pressed="${foldViewMode === 'cp'}" ${animating ? 'disabled' : ''}>${foldViewMode === 'cp' ? '返回折叠态' : '折痕图 CP'}</button><span class="step-count mono">${step} / ${n}</span></div></div><div class="canvas-wrap"><canvas id="fold" width="960" height="600" aria-label="折纸步骤示意图"></canvas></div><div class="step-timeline" aria-label="步骤时间轴">${timelineHtml}</div><div class="legend"><span>┄┄ 谷折 · 空心箭头</span><span class="red">━ · ━ 山折 · 实心箭头</span><span>┄┄ 已有折痕</span><span>⊕ 重心 CG · ◎ 焦点 AC</span></div><div class="actions"><button id="back" ${step === 0 || animating ? 'disabled' : ''}>← 上一步</button><button id="auto" ${step === n || (animating && !auto) ? 'disabled' : ''}>${auto ? '停止演示' : '自动演示'}</button>${step < n ? `<button id="finish-fold" ${animating ? 'disabled' : ''}>直接折完</button>` : ''}<span class="spacer"></span>${step === n ? '<button class="primary" id="next">前往试飞 →</button>' : `<button class="primary" id="next" ${animating ? 'disabled' : ''}>完成这一步 →</button>`}</div></section>`,
+      `<section><div class="section-head"><div><p class="eyebrow">02 / ${currentPlane().name}</p><h2>${step === n ? '折好了，准备试飞' : `第 ${step + 1} 步 · ${current.title}${subBadge}`}</h2><p>${step === n ? '轻轻压平折痕，让机翼保持对称；画布已标出重心 CG、气动焦点 AC 与龙骨剖面。' : current.description}</p></div><div class="fold-head-tools"><button type="button" id="toggle-fold-mode" class="${manualFoldMode ? 'selected' : ''}" aria-pressed="${manualFoldMode}" ${animating ? 'disabled' : ''}>${manualFoldMode ? '手动折纸' : '自动教学'}</button><button type="button" id="toggle-cp" class="${foldViewMode === 'cp' ? 'selected' : ''}" aria-pressed="${foldViewMode === 'cp'}" ${animating ? 'disabled' : ''}>${foldViewMode === 'cp' ? '返回折叠态' : '折痕图 CP'}</button><span class="step-count mono">${step} / ${n}</span></div></div><div class="canvas-wrap"><canvas id="fold" class="${manualFoldMode && foldViewMode === 'folded' && step < n ? 'interactive-fold' : ''}" width="960" height="600" aria-label="折纸工作台"></canvas></div><div class="step-timeline" aria-label="步骤时间轴">${timelineHtml}</div><div class="legend"><span>┄┄ 谷折 · 空心箭头</span><span class="red">━ · ━ 山折 · 实心箭头</span><span>◎ 金圈吸附目标</span><span>⊕ 重心 CG · ◎ 焦点 AC</span></div><div class="actions"><button id="back" ${!canUndo || animating ? 'disabled' : ''}>← 上一步</button><button id="redo" ${!canRedo || animating ? 'disabled' : ''}>重做 ↻</button>${step < n ? `<button id="fold-hint" class="${foldHint ? 'selected' : ''}" aria-pressed="${foldHint}" ${animating ? 'disabled' : ''}>提示</button>` : ''}<button id="auto" ${step === n || (animating && !auto) ? 'disabled' : ''}>${auto ? '停止演示' : '自动演示'}</button>${step < n ? `<button id="finish-fold" ${animating ? 'disabled' : ''}>跳过教学</button>` : ''}<span class="spacer"></span>${step === n ? '<button class="primary" id="next">前往试飞 →</button>' : `<button class="primary" id="next" ${animating ? 'disabled' : ''}>完成这一步 →</button>`}</div></section>`,
     );
-    drawFold();
+    drawFold(dragProgress);
+
+    const canvas = document.querySelector<HTMLCanvasElement>('#fold')!;
+    if (manualFoldMode && foldViewMode === 'folded' && step < n && target && !animating) {
+      let draggingId: number | null = null;
+      let dragStart = target.grabPoint;
+      const vp = foldViewport(papers[paper]);
+      const toSheet = (e: PointerEvent) => {
+        const rect = canvas.getBoundingClientRect();
+        const cx = ((e.clientX - rect.left) / Math.max(1, rect.width)) * 960;
+        const cy = ((e.clientY - rect.top) / Math.max(1, rect.height)) * 600;
+        return vp.toSheet(cx, cy);
+      };
+
+      canvas.onpointerdown = e => {
+        if (animating || draggingId !== null) return;
+        const pt = toSheet(e);
+        if (!isGrabHit(target, pt)) return;
+        sound.activate();
+        draggingId = e.pointerId;
+        dragStart = pt;
+        dragStatus = 'dragging';
+        dragProgress = 0;
+        canvas.classList.add('dragging');
+        canvas.setPointerCapture?.(e.pointerId);
+        drawFold(0);
+      };
+
+      canvas.onpointermove = e => {
+        if (draggingId !== e.pointerId) return;
+        const pt = toSheet(e);
+        const ev = evaluateDrag(target, dragStart, pt);
+        dragProgress = ev.progress;
+        dragStatus = ev.status;
+        drawFold(dragProgress);
+      };
+
+      const endDrag = (e: PointerEvent, cancelled: boolean) => {
+        if (draggingId !== e.pointerId) return;
+        draggingId = null;
+        canvas.classList.remove('dragging');
+        const pt = toSheet(e);
+        const ev = cancelled ? {progress: 0, shouldCommit: false, status: 'idle' as DragStatus} : evaluateDrag(target, dragStart, pt);
+        if (ev.shouldCommit) {
+          animating = true;
+          const startP = ev.progress;
+          const t0 = performance.now();
+          const dur = reduced.matches ? 0 : 180;
+          const snapTick = (now: number) => {
+            const k = dur ? Math.min(1, (now - t0) / dur) : 1;
+            const p = startP + (1 - startP) * k;
+            drawFold(p);
+            if (k < 1) {
+              animation = requestAnimationFrame(snapTick);
+            } else {
+              sound.fold();
+              foldHistory = pushHistory(foldHistory, nextCursor(foldHistory.cursor, program));
+              step = foldHistory.cursor.step;
+              foldHint = false;
+              dragStatus = 'idle';
+              dragProgress = 0;
+              animating = false;
+              render();
+            }
+          };
+          animation = requestAnimationFrame(snapTick);
+        } else {
+          const startP = dragProgress;
+          const finalStatus: DragStatus = ev.status === 'wrong-direction' ? 'wrong-direction' : 'idle';
+          const t0 = performance.now();
+          const dur = reduced.matches || startP < 0.02 ? 0 : 150;
+          const revertTick = (now: number) => {
+            const k = dur ? Math.min(1, (now - t0) / dur) : 1;
+            dragProgress = startP * (1 - k);
+            dragStatus = k < 1 ? 'dragging' : finalStatus;
+            drawFold(dragProgress);
+            if (k < 1) {
+              animation = requestAnimationFrame(revertTick);
+            } else {
+              dragProgress = 0;
+            }
+          };
+          animation = requestAnimationFrame(revertTick);
+        }
+      };
+
+      canvas.onpointerup = e => endDrag(e, false);
+      canvas.onpointercancel = e => endDrag(e, true);
+    }
+
+    document.querySelector<HTMLButtonElement>('#toggle-fold-mode')!.onclick = () => {
+      auto = false;
+      manualFoldMode = !manualFoldMode;
+      dragStatus = 'idle';
+      dragProgress = 0;
+      render();
+    };
     document.querySelector<HTMLButtonElement>('#toggle-cp')!.onclick = () => {
       foldViewMode = foldViewMode === 'cp' ? 'folded' : 'cp';
+      dragStatus = 'idle';
+      dragProgress = 0;
       render();
     };
     document.querySelectorAll<HTMLButtonElement>('[data-jump-step]').forEach(
       el =>
         (el.onclick = () => {
           auto = false;
-          step = Number(el.dataset.jumpStep);
+          const targetStep = Number(el.dataset.jumpStep);
+          foldHistory = pushHistory(foldHistory, {step: targetStep, subOp: 0});
+          step = targetStep;
+          foldHint = false;
+          dragStatus = 'idle';
+          dragProgress = 0;
           render();
         }),
     );
     document.querySelector<HTMLButtonElement>('#back')!.onclick = () => {
       auto = false;
-      step--;
+      foldHistory = undoHistory(foldHistory);
+      step = foldHistory.cursor.step;
+      foldHint = false;
+      dragStatus = 'idle';
+      dragProgress = 0;
       render();
     };
+    document.querySelector<HTMLButtonElement>('#redo')!.onclick = () => {
+      auto = false;
+      foldHistory = redoHistory(foldHistory);
+      step = foldHistory.cursor.step;
+      foldHint = false;
+      dragStatus = 'idle';
+      dragProgress = 0;
+      render();
+    };
+    const hintBtn = document.querySelector<HTMLButtonElement>('#fold-hint');
+    if (hintBtn) {
+      hintBtn.onclick = () => {
+        foldHint = !foldHint;
+        foldViewMode = 'folded';
+        render();
+      };
+    }
     document.querySelector<HTMLButtonElement>('#auto')!.onclick = () => {
       auto = !auto;
       foldViewMode = 'folded';
@@ -252,7 +403,11 @@ function render() {
     if (finishBtn) {
       finishBtn.onclick = () => {
         auto = false;
+        foldHistory = pushHistory(foldHistory, {step: n, subOp: 0});
         step = n;
+        foldHint = false;
+        dragStatus = 'idle';
+        dragProgress = 0;
         render();
       };
     }
@@ -433,27 +588,36 @@ function slider(id: string, label: string, min: number, max: number, value: numb
 
 function advance() {
   sound.activate();
-  if (animating || step >= currentPlane().steps.length) {
+  const program = currentPlane().steps;
+  if (animating || foldHistory.cursor.step >= program.length) {
     auto = false;
     render();
     return;
   }
+  const animateSingleSubOp = manualFoldMode && !auto && foldHistory.cursor.subOp > 0;
   animating = true;
   render();
   const start = performance.now();
-  const duration = reduced.matches ? 0 : 800;
+  const duration = reduced.matches ? 0 : animateSingleSubOp ? 500 : 800;
   function tick(now: number) {
     const p = duration ? Math.min(1, (now - start) / duration) : 1;
-    drawFold(p);
+    drawFold(p, !animateSingleSubOp);
     if (p < 1) {
       animation = requestAnimationFrame(tick);
     } else {
       sound.fold();
-      step++;
+      const targetCursor = animateSingleSubOp
+        ? nextCursor(foldHistory.cursor, program)
+        : {step: foldHistory.cursor.step + 1, subOp: 0};
+      foldHistory = pushHistory(foldHistory, targetCursor);
+      step = foldHistory.cursor.step;
+      foldHint = false;
+      dragStatus = 'idle';
+      dragProgress = 0;
       animating = false;
-      if (step === currentPlane().steps.length) auto = false;
+      if (step >= program.length) auto = false;
       render();
-      if (auto && step < currentPlane().steps.length) {
+      if (auto && step < program.length) {
         setTimeout(() => {
           if (auto && stage === 'fold') advance();
         }, 250);
@@ -463,10 +627,21 @@ function advance() {
   animation = requestAnimationFrame(tick);
 }
 
-function drawFold(progress = 0) {
+function drawFold(progress = 0, forceFullStepAnim = false) {
   const canvas = document.querySelector<HTMLCanvasElement>('#fold');
   if (!canvas) return;
-  renderFoldCanvas(canvas, papers[paper], currentPlane().steps, step, progress, gsm, foldViewMode);
+  const program = currentPlane().steps;
+  const target =
+    foldViewMode === 'folded' && foldHistory.cursor.step < program.length
+      ? resolveInteractiveTarget(papers[paper], program, foldHistory.cursor)
+      : null;
+  renderFoldCanvas(canvas, papers[paper], program, foldHistory.cursor.step, progress, gsm, foldViewMode, {
+    subOp: forceFullStepAnim ? 0 : foldHistory.cursor.subOp,
+    manualMode: manualFoldMode && !forceFullStepAnim,
+    showHint: foldHint,
+    dragStatus,
+    target,
+  });
 }
 
 const DESIGNER_TRIM_NOTES: Record<PlaneId, {source: string; trim: string}> = {
