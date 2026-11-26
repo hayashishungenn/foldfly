@@ -1,5 +1,5 @@
 import polygonClipping from 'polygon-clipping';
-import {area,centroid,type Polygon} from '../fold/geometry';
+import {area,centroid,clip,type Polygon} from '../fold/geometry';
 import type {FoldState} from '../fold/engine';
 import {spatialMass} from './mass3d';
 
@@ -7,6 +7,8 @@ export type Aero = {
  mass:number; cg:{x:number;y:number}; span:number; wingArea:number;
  aspectRatio:number; chord:number; noseY:number; wettedArea:number;
  aerodynamicCenter:{x:number;y:number}; wingCentroid:{x:number;y:number}; cgDepth:number; pitchInertia:number; wingPitchSecondMoment:number; frictionChord:number; bodySideArea:number; bodyFrictionChord:number;
+ /** v5 侧向:重心之后的竖直龙骨面积与其到重心的纵向力臂(风标稳定舵臂)。 */
+ keelAftArea:number; keelAftLever:number;
 };
 
 /** Area integral of squared longitudinal distance from the mass centre. */
@@ -145,7 +147,16 @@ export function extract(state:FoldState,gsm:number):Aero {
   }
  }
  const bodyFrictionChord=bodyRootIntegral>0?(bodySideArea/bodyRootIntegral)**2:0;
- return {mass:spatial?.mass ?? total*gsm/1000,cg,span,wingArea,aspectRatio:span*span/wingArea,chord,wettedArea,noseY:Math.min(...pts.map(p=>p.y)),aerodynamicCenter,wingCentroid,cgDepth:centerHeight,pitchInertia,wingPitchSecondMoment:wingSecondMoment/stripArea,frictionChord,bodySideArea,bodyFrictionChord};
+ // v5 侧向:重心之后的龙骨面积与舵臂——竖直机身在重心之后的部分像风向标尾鳍。
+ const bodyMaxX=body.reduce((m,p)=>Math.max(m,...p.map(v=>v.x)),0);
+ let keelAftArea=0,keelAftMoment=0;
+ for(const poly of body){
+  if(poly.length<3)continue;
+  const aft=clip(poly,{x:0,y:cg.y},{x:Math.max(bodyMaxX,1)+1,y:cg.y},1);
+  if(aft.length>=3){const a=area(aft);keelAftArea+=a;keelAftMoment+=a*centroid(aft).y;}
+ }
+ const keelAftLever=keelAftArea>1e-12?Math.max(0,keelAftMoment/keelAftArea-cg.y):0;
+ return {mass:spatial?.mass ?? total*gsm/1000,cg,span,wingArea,aspectRatio:span*span/wingArea,chord,wettedArea,noseY:Math.min(...pts.map(p=>p.y)),aerodynamicCenter,wingCentroid,cgDepth:centerHeight,pitchInertia,wingPitchSecondMoment:wingSecondMoment/stripArea,frictionChord,bodySideArea,bodyFrictionChord,keelAftArea,keelAftLever};
 }
 
 export type AeroMetrics = {

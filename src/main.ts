@@ -83,6 +83,7 @@ let animating = false;
 let flight: Flight | null = null;
 let previousFlight: Flight | null = null;
 let showForces = false;
+let topView = false;
 let showPolar = false;
 let followCamera = true;
 let flightPaused = false;
@@ -94,6 +95,7 @@ let animation = 0;
 let angle = 20;
 let speed = 15;
 let wind = 0;
+let crosswind = 0;
 let challenge: Challenge = 'distance';
 let plane: PlaneId = 'dart';
 
@@ -709,7 +711,7 @@ function render() {
       .join('');
 
     shell(
-      `<section><div class="section-head"><div><p class="eyebrow">03 / 比赛结算 · ${eventLabel}</p><h2>正式比赛排行榜</h2><p>${matchPaper.name} · ${activeMatch.gsm} gsm · ${paperGrade(activeMatch.grade ?? 'copy').name} · 风场种子 #${activeMatch.seed} · 物理模型 v${activeMatch.modelVersion}</p></div><div class="flight-head-tools"><button id="comp-rematch" class="primary">再来一场 →</button><button id="comp-back-free">返回自由实验</button></div></div><div class="champion-banner"><div><h3>${champTitle}</h3><p>每轮锁定风场：${activeMatch.roundWinds.map((w, i) => `R${i + 1} ${w >= 0 ? '+' : ''}${w.toFixed(1)}m/s`).join(' · ')}</p></div>${compNewPb ? '<span class="pb-tag mono">★ 刷新正式赛个人最佳！</span>' : pb ? `<span class="pb-tag mono">正式赛个人最佳 ${pb.score.toFixed(2)} ${unit} (${pb.playerName})</span>` : ''}</div><div class="canvas-wrap"><canvas id="comp-compare" width="960" height="600" aria-label="选手最佳轨迹对比"></canvas></div><div class="comp-board"><h3>三回合详细成绩</h3><table class="standings-table"><thead><tr><th>排名</th><th>选手</th><th>机型</th><th>第 1 投</th><th>第 2 投</th><th>第 3 投</th><th>最佳有效成绩</th></tr></thead><tbody>${rowsHtml}</tbody></table></div><div class="actions"><button id="comp-reconfig">重新配置赛制与选手</button><button id="comp-go-workshop">返回折纸工坊</button><span class="spacer"></span><button class="primary" id="comp-rematch-bottom">原班人马再来一场 →</button></div></section>`,
+      `<section><div class="section-head"><div><p class="eyebrow">03 / 比赛结算 · ${eventLabel}</p><h2>正式比赛排行榜</h2><p>${matchPaper.name} · ${activeMatch.gsm} gsm · ${paperGrade(activeMatch.grade ?? 'copy').name} · 风场种子 #${activeMatch.seed} · 物理模型 v${activeMatch.modelVersion}</p></div><div class="flight-head-tools"><button id="comp-rematch" class="primary">再来一场 →</button><button id="comp-back-free">返回自由实验</button></div></div><div class="champion-banner"><div><h3>${champTitle}</h3><p>每轮锁定风场：${activeMatch.roundWinds.map((w, i) => `R${i + 1} ${w.head >= 0 ? '+' : ''}${w.head.toFixed(1)}/${w.cross >= 0 ? '+' : ''}${w.cross.toFixed(1)}m/s`).join(' · ')}</p></div>${compNewPb ? '<span class="pb-tag mono">★ 刷新正式赛个人最佳！</span>' : pb ? `<span class="pb-tag mono">正式赛个人最佳 ${pb.score.toFixed(2)} ${unit} (${pb.playerName})</span>` : ''}</div><div class="canvas-wrap"><canvas id="comp-compare" width="960" height="600" aria-label="选手最佳轨迹对比"></canvas></div><div class="comp-board"><h3>三回合详细成绩</h3><table class="standings-table"><thead><tr><th>排名</th><th>选手</th><th>机型</th><th>第 1 投</th><th>第 2 投</th><th>第 3 投</th><th>最佳有效成绩</th></tr></thead><tbody>${rowsHtml}</tbody></table></div><div class="actions"><button id="comp-reconfig">重新配置赛制与选手</button><button id="comp-go-workshop">返回折纸工坊</button><span class="spacer"></span><button class="primary" id="comp-rematch-bottom">原班人马再来一场 →</button></div></section>`,
     );
 
     const compareCanvas = document.querySelector<HTMLCanvasElement>('#comp-compare')!;
@@ -791,6 +793,9 @@ function render() {
   const activeGrade: PaperGradeId = isOfficialActive ? activeMatch!.grade ?? 'copy' : grade;
   const activePlaneId: PlaneId = activeTurn ? activeTurn.player.plane : lastCompPlayer ? lastCompPlayer.plane : plane;
   const activeWind = activeTurn ? activeTurn.wind : compLastRecord ? compLastRecord.launch.wind : wind;
+  const activeCross = activeTurn ? activeTurn.crosswind : compLastRecord ? compLastRecord.launch.crosswind ?? 0 : crosswind;
+  // 闭包(投掷/滑块/拖动)在渲染之后运行,必须动态读取模块状态而非渲染时的 const
+  const currentCross = () => (isOfficialActive ? activeCross : crosswind);
   const activeChallenge: Challenge = isOfficialActive ? activeMatch!.event : challenge;
 
   if (flightMode === 'competition' && !isOfficialActive) {
@@ -810,7 +815,7 @@ function render() {
       .join('');
 
     shell(
-      `<section><div class="section-head"><div><p class="eyebrow">02 / 飞行赛场 · 正式比赛</p><h2>配置本地飞行锦标赛</h2><p>同场比赛锁定纸张、克重、材质与确定性风场种子；每人 3 投取最佳有效成绩，隐藏落地预演。</p></div><div class="flight-head-tools"><button id="change">返回折纸工坊</button></div></div><div class="mode-switch"><button type="button" id="mode-free">自由实验模式</button><button type="button" id="mode-comp" class="selected" aria-pressed="true">正式比赛模式</button></div><div class="comp-setup"><div class="comp-row"><span>比赛项目：</span><button type="button" id="comp-ev-distance" class="${compEvent === 'distance' ? 'selected' : ''}">距离赛（3 投最佳水平距离）</button><button type="button" id="comp-ev-duration" class="${compEvent === 'duration' ? 'selected' : ''}">滞空赛（3 投最佳滞空时间）</button></div><div class="comp-row"><span>参赛人数：</span>${([1, 2, 3, 4] as const).map(n => `<button type="button" data-comp-count="${n}" class="${compPlayerCount === n ? 'selected' : ''}">${n === 1 ? '单人挑战' : `${n} 人轮流赛`}</button>`).join('')}</div><div class="comp-row"><span>本场锁定环境：</span><span class="mono">${papers[paper].name} · ${gsm} gsm · ${paperGrade(grade).name} · 风场种子 #${compSeed}（${previewWinds.map((w, i) => `R${i + 1}:${w >= 0 ? '+' : ''}${w.toFixed(1)}`).join(' / ')} m/s）</span><button type="button" id="comp-reroll-seed">换一组风场</button></div><div class="comp-row"><span>同场锁定材质：</span>${grades.map(g => `<button type="button" data-comp-grade="${g.id}" class="${grade === g.id ? 'selected' : ''}">${g.name}</button>`).join('')}</div><div class="comp-row"><span>正式赛个人最佳：</span><span class="mono">距离 ${pbDist ? `${pbDist.score.toFixed(1)} m (${pbDist.playerName})` : '暂无'} · 滞空 ${pbDur ? `${pbDur.score.toFixed(1)} s (${pbDur.playerName})` : '暂无'}</span></div><div class="comp-players">${playersHtml}</div><div class="actions"><span>开赛后将锁定机型与风场环境</span><button class="primary" id="comp-start">开始正式比赛 →</button></div></div></section>`,
+      `<section><div class="section-head"><div><p class="eyebrow">02 / 飞行赛场 · 正式比赛</p><h2>配置本地飞行锦标赛</h2><p>同场比赛锁定纸张、克重、材质与确定性风场种子；每人 3 投取最佳有效成绩，隐藏落地预演。</p></div><div class="flight-head-tools"><button id="change">返回折纸工坊</button></div></div><div class="mode-switch"><button type="button" id="mode-free">自由实验模式</button><button type="button" id="mode-comp" class="selected" aria-pressed="true">正式比赛模式</button></div><div class="comp-setup"><div class="comp-row"><span>比赛项目：</span><button type="button" id="comp-ev-distance" class="${compEvent === 'distance' ? 'selected' : ''}">距离赛（3 投最佳水平距离）</button><button type="button" id="comp-ev-duration" class="${compEvent === 'duration' ? 'selected' : ''}">滞空赛（3 投最佳滞空时间）</button></div><div class="comp-row"><span>参赛人数：</span>${([1, 2, 3, 4] as const).map(n => `<button type="button" data-comp-count="${n}" class="${compPlayerCount === n ? 'selected' : ''}">${n === 1 ? '单人挑战' : `${n} 人轮流赛`}</button>`).join('')}</div><div class="comp-row"><span>本场锁定环境：</span><span class="mono">${papers[paper].name} · ${gsm} gsm · ${paperGrade(grade).name} · 风场种子 #${compSeed}（${previewWinds.map((w, i) => `R${i + 1}:${w.head >= 0 ? '+' : ''}${w.head.toFixed(1)}±${w.cross.toFixed(1)}`).join(' / ')} m/s）</span><button type="button" id="comp-reroll-seed">换一组风场</button></div><div class="comp-row"><span>同场锁定材质：</span>${grades.map(g => `<button type="button" data-comp-grade="${g.id}" class="${grade === g.id ? 'selected' : ''}">${g.name}</button>`).join('')}</div><div class="comp-row"><span>正式赛个人最佳：</span><span class="mono">距离 ${pbDist ? `${pbDist.score.toFixed(1)} m (${pbDist.playerName})` : '暂无'} · 滞空 ${pbDur ? `${pbDur.score.toFixed(1)} s (${pbDur.playerName})` : '暂无'}</span></div><div class="comp-players">${playersHtml}</div><div class="actions"><span>开赛后将锁定机型与风场环境</span><button class="primary" id="comp-start">开始正式比赛 →</button></div></div></section>`,
     );
 
     document.querySelector<HTMLButtonElement>('#mode-free')!.onclick = () => {
@@ -906,8 +911,8 @@ function render() {
   // v4:自由模式携带玩家手折的折痕质量;正式比赛用预设折序(完美折痕)。
   const foldQuality = isOfficialActive ? 1 : programFoldQuality(activePlaneDef.steps, foldScores);
   const options = simOptions(activeGrade, activeGsm, foldQuality);
-  let preview = simulate(aero, {angle, speed, wind: activeWind}, options);
-  const analysis = analyzeFlight(flight ?? preview, aero, {angle, speed, wind: activeWind}, previousFlight);
+  let preview = simulate(aero, {angle, speed, wind: activeWind, crosswind: currentCross()}, options);
+  const analysis = analyzeFlight(flight ?? preview, aero, {angle, speed, wind: activeWind, crosswind: currentCross()}, previousFlight);
   const sharedMessage =
     !isOfficialActive && sharedResult
       ? `分享的成绩：${sharedResult.distance.toFixed(1)} m · ${sharedResult.duration.toFixed(1)} s · 最高 ${sharedResult.height.toFixed(1)} m。${preview.landed && matchesSharedResult(sharedResult, preview) ? '当前模型可复现。' : '当前模型结果不同，可能来自其他版本。'}`
@@ -915,7 +920,7 @@ function render() {
 
   const compBannerHtml = isOfficialActive
     ? activeTurn
-      ? `<div class="comp-banner"><div><strong>第 ${activeTurn.round} / ${activeMatch!.rounds} 轮 · ${activeTurn.player.name}（${activePlaneDef.name}）</strong><br><span>${activeMatch!.event === 'distance' ? '距离赛' : '滞空赛'} · 锁定环境 ${activeSheet.name} ${activeGsm}g ${paperGrade(activeGrade).name} · 本轮风场 ${activeTurn.wind >= 0 ? '+' : ''}${activeTurn.wind.toFixed(1)} m/s · 种子 #${activeMatch!.seed}</span></div><button type="button" id="comp-abort">中途退赛</button></div>`
+      ? `<div class="comp-banner"><div><strong>第 ${activeTurn.round} / ${activeMatch!.rounds} 轮 · ${activeTurn.player.name}（${activePlaneDef.name}）</strong><br><span>${activeMatch!.event === 'distance' ? '距离赛' : '滞空赛'} · 锁定环境 ${activeSheet.name} ${activeGsm}g ${paperGrade(activeGrade).name} · 本轮风场 ${activeTurn.wind >= 0 ? '+' : ''}${activeTurn.wind.toFixed(1)} / 侧风 ${activeTurn.crosswind >= 0 ? '+' : ''}${activeTurn.crosswind.toFixed(1)} m/s · 种子 #${activeMatch!.seed}</span></div><button type="button" id="comp-abort">中途退赛</button></div>`
       : `<div class="comp-banner"><div><strong>全部 ${activeMatch!.rounds} 轮投掷已完成！</strong><br><span>点击下方「查看冠军结算 →」进入排行榜与轨迹对比</span></div><button type="button" id="comp-abort">返回配置</button></div>`
     : '';
 
@@ -934,9 +939,9 @@ function render() {
       : `<button class="primary" id="throw">${flight ? (isOfficialActive ? '飞行中…' : '再次投掷 →') : '投掷纸飞机 →'}</button>`;
 
   shell(
-    `<section><div class="section-head"><div><p class="eyebrow">02 / 飞行赛场${isOfficialActive ? ' · 正式比赛' : ''}</p><h2>${isOfficialActive ? (activeTurn ? `${activeTurn.player.name} 上场投掷` : '本场比赛投掷结束') : '给它一次飞行'}</h2><p>${activeSheet.name} · ${activeGsm} gsm · ${paperGrade(activeGrade).name} · ${activePlaneDef.name}</p></div><div class="flight-head-tools"><button type="button" id="toggle-camera" class="${followCamera ? 'selected' : ''}" aria-pressed="${followCamera}">${followCamera ? '跟随相机：开' : '跟随相机：关'}</button>${isOfficialActive ? '' : designProgram ? '<button id="design-return">返回设计台</button>' : '<button id="change">换纸重折</button>'}</div></div>${!isOfficialActive && !designProgram ? `<div class="mode-switch"><button type="button" id="mode-free" class="selected" aria-pressed="true">自由实验模式</button><button type="button" id="mode-comp">正式比赛模式（1–4 人）</button></div>` : ''}${compBannerHtml}${!isOfficialActive && legacyMessage ? `<p class="legacy-share" role="status">${legacyMessage}</p>` : ''}${sharedMessage ? `<p class="shared-result">${sharedMessage}</p>` : ''}<div class="canvas-wrap"><canvas id="flight" class="${!flight ? 'interactive-fold' : ''}" width="960" height="600" aria-label="飞行轨迹与试飞场"></canvas><div class="confetti" aria-hidden="true">${Array.from({length: 24}, (_, i) => `<i style="--x:${(i * 41) % 100}%;--delay:${(i % 6) * 0.08}s;--colour:${['var(--paper)', 'var(--mark-red)', 'var(--ink)'][i % 3]}"></i>`).join('')}</div></div><p class="ghost-note">${isOfficialActive ? '正式比赛已隐藏落地预演虚线：在画布上向后下方拖动蓄力，松手即投掷。' : '在画布上向后下方拖动蓄力，松手即投掷；下方滑块可供精确实验微调。'}</p>${!isOfficialActive ? `<div class="challenge"><span>选择挑战</span><button id="distance-challenge" class="${challenge === 'distance' ? 'selected' : ''}" aria-pressed="${challenge === 'distance'}">距离赛 · 88.3 m 里程碑 / 98.4 m WR</button><button id="duration-challenge" class="${challenge === 'duration' ? 'selected' : ''}" aria-pressed="${challenge === 'duration'}">滞空赛 · 29.2 s 里程碑 / 31.2 s WR</button><p id="challenge-result">${flight ? '挑战结算将在落地后显示' : '调整投掷，挑战历史里程碑与世界纪录'}</p></div>` : `<p id="challenge-result" class="ghost-note">${compLastRecord ? (compLastRecord.valid ? `本投有效成绩：${compLastRecord.score!.toFixed(2)} ${activeMatch!.event === 'distance' ? 'm' : 's'}` : `本投无效：${compLastRecord.invalidReason}`) : '请拖动蓄力或调整角度与力度后投掷'}</p>`}<div class="flight-status">${flight ? '试飞完成' : '准备起飞 · 拖动蓄力或调整滑块'} <span class="mono">${isOfficialActive ? (activeTurn ? `第 ${activeTurn.round}/${activeMatch!.rounds} 轮` : `全部 ${activeMatch!.rounds} 轮完成`) : designProgram ? `自由设计 · ${flightDesign!.name}` : `个人最佳 ${bestLabel()}`}</span></div><div class="results" aria-live="polite"><div><small>飞行距离</small><strong>${flight ? flight.distance.toFixed(1) : '—'} <em>m</em></strong></div><div><small>滞空时间</small><strong>${flight ? flight.duration.toFixed(1) : '—'} <em>s</em></strong></div><div><small>最高高度</small><strong>${flight ? flight.height.toFixed(1) : '—'} <em>m</em></strong></div></div>${liveStandingsHtml}<div class="controls">${slider('angle', '投掷角度', 0, 75, angle, '°')}${slider('speed', '投掷力度', 6, 28, speed, ' m/s')}${isOfficialActive ? `<label><span>本轮锁定风速 <b class="mono">${activeWind >= 0 ? '+' : ''}${activeWind.toFixed(1)} m/s</b></span><input id="wind" type="range" min="-4" max="4" step="0.5" value="${activeWind}" disabled></label>` : slider('wind', '风速', -4, 4, wind, ' m/s')}</div>${!isOfficialActive ? `<div class="wind-presets"><span>风场速设：</span>${[-3, 0, 3].map(w => `<button type="button" class="wind-preset ${wind === w ? 'selected' : ''}" data-wind="${w}">${w < 0 ? `逆风 ${w}` : w === 0 ? '无风 0' : `顺风 +${w}`} m/s</button>`).join('')}</div><div class="recommendation"><p><b>投掷起点：</b>${activePlaneDef.recommendation.note}</p><button id="apply-recommendation">采用建议角度与力度</button></div>` : ''}<div class="actions"><span>${isOfficialActive ? '正式赛同场环境已锁定' : designProgram ? '自由设计 · 成绩仅在本地记录' : '虚线为预演轨迹 · 正风速为顺风'}</span>${!isOfficialActive && !designProgram ? '<button id="share">分享这次配置</button>' : ''}${flight ? `<button id="pause-flight">${flightPaused ? '继续飞行' : '暂停'}</button><button id="slow-replay">慢动作回放 0.4×</button>` : ''}${nextTurnActionHtml}</div><details class="physics aero-deep-panel"><summary>高级分析：受力矢量、极曲线、轨迹诊断与几何参数</summary><div class="flight-head-tools" style="margin:10px 0"><button type="button" id="toggle-forces" class="${showForces ? 'selected' : ''}" aria-pressed="${showForces}">${showForces ? '受力矢量：开' : '受力矢量：关'}</button><button type="button" id="toggle-polar" class="${showPolar ? 'selected' : ''}" aria-pressed="${showPolar}">${showPolar ? '极曲线图：开' : '极曲线图：关'}</button></div><div class="flight-diagnostic" id="flight-diagnostic"><div class="diag-head"><span class="mono diag-regime">${analysis.regimeLabel}</span>${analysis.comparison ? `<span class="mono diag-compare">${analysis.comparison.summary}</span>` : ''}</div><p id="diag-verdict">${analysis.verdict}</p></div><div id="aero-deep-content">${renderAeroDeepHtml(flight ?? preview, aero, {angle, speed, wind: activeWind}, designProgram ? FREESTYLE_PLANE_ID : activePlaneId)}</div><div class="physics-grid" style="margin-top:12px"><span>材质 <b class="mono">${paperGrade(activeGrade).name}</b></span><span>厚度 <b class="mono">${(materialProfile(activeGrade, activeGsm).thickness * 1e6).toFixed(0)} µm</b></span><span>折痕利落度 <b class="mono">${(materialProfile(activeGrade, activeGsm).creaseCrispness * 100).toFixed(0)}%<small>（经验代理）</small></b></span><span>折痕质量 <b class="mono">${(foldQuality * 100).toFixed(0)}%</b></span><span>质量 <b class="mono">${(aero.mass * 1000).toFixed(2)} g</b></span><span>翼展 <b class="mono">${(aero.span * 100).toFixed(1)} cm</b></span><span>翼面积 <b class="mono">${(aero.wingArea * 10000).toFixed(0)} cm²</b></span><span>展弦比 <b class="mono">${aero.aspectRatio.toFixed(2)}</b></span><span>重心（距机头） <b class="mono">${((aero.cg.y - aero.noseY) * 100).toFixed(1)} cm</b></span><span>静稳定余量 <b class="mono">${(metrics.staticMargin * 100).toFixed(1)}%</b></span><span>翼载荷 <b class="mono">${metrics.wingLoading.toFixed(2)} N/m²</b></span><span>龙骨深度 <b class="mono">${(metrics.keelDepth * 100).toFixed(1)} cm</b></span><span>基准滑翔速 <b class="mono">${metrics.nominalGlideSpeed.toFixed(1)} m/s</b></span></div></details></section>`,
+    `<section><div class="section-head"><div><p class="eyebrow">02 / 飞行赛场${isOfficialActive ? ' · 正式比赛' : ''}</p><h2>${isOfficialActive ? (activeTurn ? `${activeTurn.player.name} 上场投掷` : '本场比赛投掷结束') : '给它一次飞行'}</h2><p>${activeSheet.name} · ${activeGsm} gsm · ${paperGrade(activeGrade).name} · ${activePlaneDef.name}</p></div><div class="flight-head-tools"><button type="button" id="toggle-topview" class="${topView ? 'selected' : ''}" aria-pressed="${topView}">${topView ? '俯视：开' : '俯视：关'}</button><button type="button" id="toggle-camera" class="${followCamera ? 'selected' : ''}" aria-pressed="${followCamera}">${followCamera ? '跟随相机：开' : '跟随相机：关'}</button>${isOfficialActive ? '' : designProgram ? '<button id="design-return">返回设计台</button>' : '<button id="change">换纸重折</button>'}</div></div>${!isOfficialActive && !designProgram ? `<div class="mode-switch"><button type="button" id="mode-free" class="selected" aria-pressed="true">自由实验模式</button><button type="button" id="mode-comp">正式比赛模式（1–4 人）</button></div>` : ''}${compBannerHtml}${!isOfficialActive && legacyMessage ? `<p class="legacy-share" role="status">${legacyMessage}</p>` : ''}${sharedMessage ? `<p class="shared-result">${sharedMessage}</p>` : ''}<div class="canvas-wrap"><canvas id="flight" class="${!flight ? 'interactive-fold' : ''}" width="960" height="600" aria-label="飞行轨迹与试飞场"></canvas><div class="confetti" aria-hidden="true">${Array.from({length: 24}, (_, i) => `<i style="--x:${(i * 41) % 100}%;--delay:${(i % 6) * 0.08}s;--colour:${['var(--paper)', 'var(--mark-red)', 'var(--ink)'][i % 3]}"></i>`).join('')}</div></div><p class="ghost-note">${isOfficialActive ? '正式比赛已隐藏落地预演虚线：在画布上向后下方拖动蓄力，松手即投掷。' : '在画布上向后下方拖动蓄力，松手即投掷；下方滑块可供精确实验微调。'}</p>${!isOfficialActive ? `<div class="challenge"><span>选择挑战</span><button id="distance-challenge" class="${challenge === 'distance' ? 'selected' : ''}" aria-pressed="${challenge === 'distance'}">距离赛 · 88.3 m 里程碑 / 98.4 m WR</button><button id="duration-challenge" class="${challenge === 'duration' ? 'selected' : ''}" aria-pressed="${challenge === 'duration'}">滞空赛 · 29.2 s 里程碑 / 31.2 s WR</button><p id="challenge-result">${flight ? '挑战结算将在落地后显示' : '调整投掷，挑战历史里程碑与世界纪录'}</p></div>` : `<p id="challenge-result" class="ghost-note">${compLastRecord ? (compLastRecord.valid ? `本投有效成绩：${compLastRecord.score!.toFixed(2)} ${activeMatch!.event === 'distance' ? 'm' : 's'}` : `本投无效：${compLastRecord.invalidReason}`) : '请拖动蓄力或调整角度与力度后投掷'}</p>`}<div class="flight-status">${flight ? '试飞完成' : '准备起飞 · 拖动蓄力或调整滑块'} <span class="mono">${isOfficialActive ? (activeTurn ? `第 ${activeTurn.round}/${activeMatch!.rounds} 轮` : `全部 ${activeMatch!.rounds} 轮完成`) : designProgram ? `自由设计 · ${flightDesign!.name}` : `个人最佳 ${bestLabel()}`}</span></div><div class="results" aria-live="polite"><div><small>飞行距离</small><strong>${flight ? flight.distance.toFixed(1) : '—'} <em>m</em></strong></div><div><small>滞空时间</small><strong>${flight ? flight.duration.toFixed(1) : '—'} <em>s</em></strong></div><div><small>最高高度</small><strong>${flight ? flight.height.toFixed(1) : '—'} <em>m</em></strong></div></div>${liveStandingsHtml}<div class="controls">${slider('angle', '投掷角度', 0, 75, angle, '°')}${slider('speed', '投掷力度', 6, 28, speed, ' m/s')}${isOfficialActive ? `<label><span>本轮锁定风速 <b class="mono">${activeWind >= 0 ? '+' : ''}${activeWind.toFixed(1)} m/s · 侧风 ${activeCross >= 0 ? '+' : ''}${activeCross.toFixed(1)} m/s</b></span><input id="wind" type="range" min="-4" max="4" step="0.5" value="${activeWind}" disabled></label>` : `${slider('wind', '风速（顺风为正）', -4, 4, wind, ' m/s')}${slider('crosswind', '侧风（右为正）', -4, 4, crosswind, ' m/s')}`}</div>${!isOfficialActive ? `<div class="wind-presets"><span>风场速设：</span>${[-3, 0, 3].map(w => `<button type="button" class="wind-preset ${wind === w ? 'selected' : ''}" data-wind="${w}">${w < 0 ? `逆风 ${w}` : w === 0 ? '无风 0' : `顺风 +${w}`} m/s</button>`).join('')}</div><div class="recommendation"><p><b>投掷起点：</b>${activePlaneDef.recommendation.note}</p><button id="apply-recommendation">采用建议角度与力度</button></div>` : ''}<div class="actions"><span>${isOfficialActive ? '正式赛同场环境已锁定' : designProgram ? '自由设计 · 成绩仅在本地记录' : '虚线为预演轨迹 · 正风速为顺风'}</span>${!isOfficialActive && !designProgram ? '<button id="share">分享这次配置</button>' : ''}${flight ? `<button id="pause-flight">${flightPaused ? '继续飞行' : '暂停'}</button><button id="slow-replay">慢动作回放 0.4×</button>` : ''}${nextTurnActionHtml}</div><details class="physics aero-deep-panel"><summary>高级分析：受力矢量、极曲线、轨迹诊断与几何参数</summary><div class="flight-head-tools" style="margin:10px 0"><button type="button" id="toggle-forces" class="${showForces ? 'selected' : ''}" aria-pressed="${showForces}">${showForces ? '受力矢量：开' : '受力矢量：关'}</button><button type="button" id="toggle-polar" class="${showPolar ? 'selected' : ''}" aria-pressed="${showPolar}">${showPolar ? '极曲线图：开' : '极曲线图：关'}</button></div><div class="flight-diagnostic" id="flight-diagnostic"><div class="diag-head"><span class="mono diag-regime">${analysis.regimeLabel}</span>${analysis.comparison ? `<span class="mono diag-compare">${analysis.comparison.summary}</span>` : ''}</div><p id="diag-verdict">${analysis.verdict}</p></div><div id="aero-deep-content">${renderAeroDeepHtml(flight ?? preview, aero, {angle, speed, wind: activeWind, crosswind: activeCross}, designProgram ? FREESTYLE_PLANE_ID : activePlaneId)}</div><div class="physics-grid" style="margin-top:12px"><span>材质 <b class="mono">${paperGrade(activeGrade).name}</b></span><span>厚度 <b class="mono">${(materialProfile(activeGrade, activeGsm).thickness * 1e6).toFixed(0)} µm</b></span><span>折痕利落度 <b class="mono">${(materialProfile(activeGrade, activeGsm).creaseCrispness * 100).toFixed(0)}%<small>（经验代理）</small></b></span><span>折痕质量 <b class="mono">${(foldQuality * 100).toFixed(0)}%</b></span><span>质量 <b class="mono">${(aero.mass * 1000).toFixed(2)} g</b></span><span>翼展 <b class="mono">${(aero.span * 100).toFixed(1)} cm</b></span><span>翼面积 <b class="mono">${(aero.wingArea * 10000).toFixed(0)} cm²</b></span><span>展弦比 <b class="mono">${aero.aspectRatio.toFixed(2)}</b></span><span>重心（距机头） <b class="mono">${((aero.cg.y - aero.noseY) * 100).toFixed(1)} cm</b></span><span>静稳定余量 <b class="mono">${(metrics.staticMargin * 100).toFixed(1)}%</b></span><span>翼载荷 <b class="mono">${metrics.wingLoading.toFixed(2)} N/m²</b></span><span>龙骨深度 <b class="mono">${(metrics.keelDepth * 100).toFixed(1)} cm</b></span><span>基准滑翔速 <b class="mono">${metrics.nominalGlideSpeed.toFixed(1)} m/s</b></span></div></details></section>`,
   );
-  drawFlight(preview, flight, aero, activeWind, activeChallenge, isOfficialActive);
+  drawFlight(preview, flight, aero, activeWind, activeChallenge, isOfficialActive, activeCross);
 
   const launchNow = (launchAngle: number, launchSpeed: number) => {
     if (isOfficialActive && compThrowRecorded) return;
@@ -953,7 +958,7 @@ function render() {
     playbackRate = 1;
     if (flight) previousFlight = flight;
     activeGhost = isOfficialActive || flightDesign ? null : getGhost(challenge);
-    preview = simulate(aero, {angle, speed, wind: activeWind}, options);
+    preview = simulate(aero, {angle, speed, wind: activeWind, crosswind: currentCross()}, options);
     flight = preview;
     playStart = performance.now();
     render();
@@ -991,7 +996,7 @@ function render() {
     chargeState = {anchor: chargeAnchor, pointer: pt, result: res};
     flightCanvas.classList.add('dragging');
     flightCanvas.setPointerCapture?.(e.pointerId);
-    drawFlight(preview, null, aero, activeWind, activeChallenge, isOfficialActive);
+    drawFlight(preview, null, aero, activeWind, activeChallenge, isOfficialActive, activeCross);
   };
   flightCanvas.onpointermove = e => {
     if (chargePointerId !== e.pointerId) return;
@@ -1001,7 +1006,7 @@ function render() {
     if (res.ready) {
       angle = res.angle;
       speed = res.speed;
-      preview = simulate(aero, {angle, speed, wind: activeWind}, options);
+      preview = simulate(aero, {angle, speed, wind: activeWind, crosswind: currentCross()}, options);
       const angleInput = document.querySelector<HTMLInputElement>('#angle');
       const speedInput = document.querySelector<HTMLInputElement>('#speed');
       if (angleInput) {
@@ -1015,7 +1020,7 @@ function render() {
         if (b) b.textContent = `${speed} m/s`;
       }
     }
-    drawFlight(preview, null, aero, activeWind, activeChallenge, isOfficialActive);
+    drawFlight(preview, null, aero, activeWind, activeChallenge, isOfficialActive, activeCross);
   };
   const endCharge = (e: PointerEvent, cancelled: boolean) => {
     if (chargePointerId !== e.pointerId) return;
@@ -1027,7 +1032,7 @@ function render() {
     if (!cancelled && res.ready) {
       launchNow(res.angle, res.speed);
     } else {
-      drawFlight(preview, flight, aero, activeWind, activeChallenge, isOfficialActive);
+      drawFlight(preview, flight, aero, activeWind, activeChallenge, isOfficialActive, activeCross);
     }
   };
   flightCanvas.onpointerup = e => endCharge(e, false);
@@ -1085,6 +1090,17 @@ function render() {
       render();
     };
   }
+  const topViewBtn = document.querySelector<HTMLButtonElement>('#toggle-topview');
+  if (topViewBtn) {
+    topViewBtn.onclick = () => {
+      topView = !topView;
+      topViewBtn.classList.toggle('selected', topView);
+      topViewBtn.setAttribute('aria-pressed', String(topView));
+      topViewBtn.textContent = topView ? '俯视：开' : '俯视：关';
+      cancelAnimationFrame(animation);
+      drawFlight(preview, flight, aero, activeWind, activeChallenge, isOfficialActive, activeCross);
+    };
+  }
   const cameraBtn = document.querySelector<HTMLButtonElement>('#toggle-camera')!;
   cameraBtn.onclick = () => {
     followCamera = !followCamera;
@@ -1092,7 +1108,7 @@ function render() {
     cameraBtn.setAttribute('aria-pressed', String(followCamera));
     cameraBtn.textContent = followCamera ? '跟随相机：开' : '跟随相机：关';
     cancelAnimationFrame(animation);
-    drawFlight(preview, flight, aero, activeWind, activeChallenge, isOfficialActive);
+    drawFlight(preview, flight, aero, activeWind, activeChallenge, isOfficialActive, activeCross);
   };
   const forcesBtn = document.querySelector<HTMLButtonElement>('#toggle-forces');
   if (forcesBtn) {
@@ -1102,7 +1118,7 @@ function render() {
       forcesBtn.setAttribute('aria-pressed', String(showForces));
       forcesBtn.textContent = showForces ? '受力矢量：开' : '受力矢量：关';
       cancelAnimationFrame(animation);
-      drawFlight(preview, flight, aero, activeWind, activeChallenge, isOfficialActive);
+      drawFlight(preview, flight, aero, activeWind, activeChallenge, isOfficialActive, activeCross);
     };
   }
   const polarBtn = document.querySelector<HTMLButtonElement>('#toggle-polar');
@@ -1113,7 +1129,7 @@ function render() {
       polarBtn.setAttribute('aria-pressed', String(showPolar));
       polarBtn.textContent = showPolar ? '极曲线图：开' : '极曲线图：关';
       cancelAnimationFrame(animation);
-      drawFlight(preview, flight, aero, activeWind, activeChallenge, isOfficialActive);
+      drawFlight(preview, flight, aero, activeWind, activeChallenge, isOfficialActive, activeCross);
     };
   }
   document.querySelectorAll<HTMLButtonElement>('[data-wind]').forEach(
@@ -1154,13 +1170,14 @@ function render() {
       };
     }
   }
-  for (const id of ['angle', 'speed', 'wind']) {
+  for (const id of ['angle', 'speed', 'wind', 'crosswind']) {
     const el = document.querySelector<HTMLInputElement>('#' + id);
     if (!el || el.disabled) continue;
     el.oninput = () => {
       if (id === 'angle') angle = +el.value;
       if (id === 'speed') speed = +el.value;
       if (id === 'wind') wind = +el.value;
+      if (id === 'crosswind') crosswind = +el.value;
       sharedResult = undefined;
       legacyMessage = '';
       if (!isOfficialActive) {
@@ -1188,14 +1205,14 @@ function render() {
       if (launch && !isOfficialActive) launch.textContent = '投掷纸飞机 →';
       const share = document.querySelector<HTMLButtonElement>('#share');
       if (share) share.textContent = '分享这次配置';
-      preview = simulate(aero, {angle, speed, wind: activeWind}, options);
-      const liveAnalysis = analyzeFlight(preview, aero, {angle, speed, wind: activeWind}, previousFlight);
+      preview = simulate(aero, {angle, speed, wind: activeWind, crosswind: currentCross()}, options);
+      const liveAnalysis = analyzeFlight(preview, aero, {angle, speed, wind: activeWind, crosswind: currentCross()}, previousFlight);
       const diagRegime = document.querySelector('.diag-regime');
       if (diagRegime) diagRegime.textContent = liveAnalysis.regimeLabel;
       const diagVerdict = document.querySelector('#diag-verdict');
       if (diagVerdict) diagVerdict.textContent = liveAnalysis.verdict;
       const deepContent = document.querySelector('#aero-deep-content');
-      if (deepContent) deepContent.innerHTML = renderAeroDeepHtml(preview, aero, {angle, speed, wind: activeWind}, designProgram ? FREESTYLE_PLANE_ID : activePlaneId);
+      if (deepContent) deepContent.innerHTML = renderAeroDeepHtml(preview, aero, {angle, speed, wind: activeWind, crosswind: activeCross}, designProgram ? FREESTYLE_PLANE_ID : activePlaneId);
       drawFlight(preview, isOfficialActive ? flight : null, aero, activeWind, activeChallenge, isOfficialActive);
     };
   }
@@ -1221,7 +1238,7 @@ function render() {
         playStart = performance.now() - (pausedElapsed / playbackRate) * 1000;
       }
       pauseBtn.textContent = flightPaused ? '继续飞行' : '暂停';
-      drawFlight(preview, flight, aero, activeWind, activeChallenge, isOfficialActive);
+      drawFlight(preview, flight, aero, activeWind, activeChallenge, isOfficialActive, activeCross);
     };
   }
   const slowBtn = document.querySelector<HTMLButtonElement>('#slow-replay');
@@ -1255,6 +1272,7 @@ function render() {
         angle,
         speed,
         wind,
+        ...(crosswind !== 0 ? {crosswind} : {}),
         step: currentPlane().steps.length,
         challenge,
         ...(score ? {result: score} : {}),
@@ -1462,6 +1480,7 @@ function drawFlight(
   activeWind = wind,
   activeChallenge: Challenge = challenge,
   hidePreview = false,
+  activeCross = crosswind,
 ) {
   const canvas = document.querySelector<HTMLCanvasElement>('#flight');
   if (!canvas) return;
@@ -1474,17 +1493,17 @@ function drawFlight(
     ghost,
     activeChallenge,
     elapsed,
-    {angle, speed, wind: activeWind},
+    {angle, speed, wind: activeWind, crosswind: activeCross},
     aero,
     showForces,
     showPolar,
-    {followCamera, chargeState, paused: flightPaused, hidePreview},
+    {followCamera, chargeState, paused: flightPaused, hidePreview, topView},
   );
   if (actual) {
     updateFlightFeedback(actual, elapsed, activeWind, hidePreview);
     if (elapsed < actual.duration && !flightPaused) {
       animation = requestAnimationFrame(() =>
-        drawFlight(preview, actual, aero, activeWind, activeChallenge, hidePreview),
+        drawFlight(preview, actual, aero, activeWind, activeChallenge, hidePreview, activeCross),
       );
     }
   }
@@ -1505,7 +1524,7 @@ function updateFlightFeedback(actual: Flight, elapsed: number, activeWind = wind
   if (done && isOfficial && activeMatch && activeMatch.status === 'in-progress' && !compThrowRecorded) {
     const turn = currentTurn(activeMatch);
     if (turn) {
-      const committed = recordCompetitionThrow(activeMatch, {angle, speed, wind: turn.wind}, actual);
+      const committed = recordCompetitionThrow(activeMatch, {angle, speed, wind: turn.wind, crosswind: turn.crosswind}, actual);
       activeMatch = committed.match;
       compLastRecord = committed.record;
       compThrowRecorded = true;
@@ -1559,7 +1578,8 @@ function updateFlightFeedback(actual: Flight, elapsed: number, activeWind = wind
       '</span>';
   }
   const numbers = document.querySelectorAll('.results strong');
-  [frame.sample.x, frame.sample.t, frame.height].forEach((n, i) => {
+  // v5:距离显示含侧向漂移(与结算口径一致的水平距离)
+  [Math.hypot(frame.sample.x, frame.sample.z ?? 0), frame.sample.t, frame.height].forEach((n, i) => {
     if (numbers[i]) numbers[i].innerHTML = n.toFixed(1) + ' <em>' + ['m', 's', 'm'][i] + '</em>';
   });
   const launch = document.querySelector<HTMLButtonElement>('#throw');

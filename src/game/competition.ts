@@ -46,7 +46,7 @@ export type CompetitionMatch = {
   grade?: PaperGradeId;
   seed: number;
   rounds: number;
-  roundWinds: number[];
+  roundWinds: RoundWind[];
   players: CompetitionPlayer[];
   status: CompetitionStatus;
   locked: boolean;
@@ -80,14 +80,22 @@ export function seededRandom(seed: number): () => number {
   };
 }
 
-/** Generate deterministic per-round wind values in [-3, +3] m/s (0.5 m/s steps). */
-export function generateRoundWinds(seed: number, rounds = 3): number[] {
+/** Per-round locked wind: head/tail along +x, crosswind along +z. */
+export type RoundWind = {head: number; cross: number};
+
+/**
+ * Generate deterministic per-round winds in [-3, +3] m/s (0.5 m/s steps).
+ * The first draw of each round is the head/tail component and preserves the
+ * historical single-draw sequence; the second draw is the crosswind (v5).
+ */
+export function generateRoundWinds(seed: number, rounds = 3): RoundWind[] {
   const rand = seededRandom(seed);
-  const winds: number[] = [];
+  const winds: RoundWind[] = [];
   for (let i = 0; i < rounds; i++) {
     // Integer steps -6..+6 -> -3.0..+3.0 m/s in 0.5 m/s increments
-    const step = Math.floor(rand() * 13) - 6;
-    winds.push(step * 0.5);
+    const head = (Math.floor(rand() * 13) - 6) * 0.5;
+    const cross = (Math.floor(rand() * 13) - 6) * 0.5;
+    winds.push({head, cross});
   }
   return winds;
 }
@@ -138,16 +146,18 @@ export function currentTurn(match: CompetitionMatch): {
   playerIndex: number;
   round: number;
   wind: number;
+  crosswind: number;
 } | null {
   if (match.status !== 'in-progress') return null;
   const player = match.players[match.currentPlayerIndex];
   if (!player) return null;
-  const wind = match.roundWinds[match.currentRound - 1] ?? 0;
+  const roundWind = match.roundWinds[match.currentRound - 1] ?? {head: 0, cross: 0};
   return {
     player,
     playerIndex: match.currentPlayerIndex,
     round: match.currentRound,
-    wind,
+    wind: roundWind.head,
+    crosswind: roundWind.cross,
   };
 }
 

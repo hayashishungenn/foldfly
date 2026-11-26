@@ -6,7 +6,7 @@ import {FLIGHT_MODEL_VERSION} from '../aero/integrator';
 import type {Flight} from '../aero/integrator';
 import {FOLD_ENGINE_VERSION} from '../fold/engine';
 export type SharedResult={distance:number;duration:number;height:number};
-export type SharedFlight = {version:1;plane:PlaneId;paper:Paper['id'];gsm:typeof weights[number];angle:number;speed:number;wind:number;step:number;grade?:PaperGradeId;foldSignature?:string;foldEngineVersion?:number;modelVersion?:number;challenge?:'distance'|'duration';result?:SharedResult};
+export type SharedFlight = {version:1;plane:PlaneId;paper:Paper['id'];gsm:typeof weights[number];angle:number;speed:number;wind:number;crosswind?:number;step:number;grade?:PaperGradeId;foldSignature?:string;foldEngineVersion?:number;modelVersion?:number;challenge?:'distance'|'duration';result?:SharedResult};
 /** FNV-1a over the program; detects edits even when the step count is unchanged. */
 function hashProgram(value:unknown):string {
  let hash=2166136261;
@@ -36,6 +36,8 @@ export function decodeFlight(hash:string):SharedFlight|null {
   }
   if(x.challenge!==undefined && !['distance','duration'].includes(x.challenge))return null;
   for(const [key,min,max] of [['angle',0,75],['speed',6,28],['wind',-4,4]] as const)if(typeof x[key]!=='number'||!Number.isFinite(x[key])||x[key]<min||x[key]>max)return null;
+  // 侧风为可选字段(v5):缺省 0,非法值拒绝
+  if(x.crosswind!==undefined&&(typeof x.crosswind!=='number'||!Number.isFinite(x.crosswind)||Math.abs(x.crosswind)>4))return null;
   return x;
  } catch { return null }
 }

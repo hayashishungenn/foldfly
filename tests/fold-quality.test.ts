@@ -14,8 +14,8 @@ const aero = (plane: PlaneId, gsm = 80) =>
 const launch: Throw = {angle: 0, speed: 20, wind: 0};
 
 describe('v4 折痕质量与材质定形通道', () => {
-  it('版本号已递增到 4(旧 ghost/分享键自动归档)', () => {
-    expect(FLIGHT_MODEL_VERSION).toBe(4);
+  it('版本号已随侧向物理递增到 5(旧 ghost/分享键自动归档)', () => {
+    expect(FLIGHT_MODEL_VERSION).toBe(5);
   });
 
   it('完美折痕 + 缺省材质与显式完美折痕 + 复印纸逐位一致(v3 锚点零漂移)', () => {

@@ -18,7 +18,146 @@ export type FlightRenderOptions = {
   followCamera?: boolean;
   chargeState?: {anchor: CanvasPoint; pointer: CanvasPoint; result: DragThrowResult} | null;
   paused?: boolean;
+  /** v5 俯视模式:画布改为 x–z 平面(顶视),展示侧风漂移与偏航。 */
+  topView?: boolean;
 };
+
+/**
+ * v5 俯视图:作业本方格 + 每米刻度,绘制弹道在 x–z 平面的投影、机头朝向
+ * 与风矢量。只消费飞行采样(含可选 z/psi),不反推任何物理量。
+ */
+function renderTopDownView(
+  c: CanvasRenderingContext2D,
+  preview: Flight,
+  actual: Flight | null,
+  ghost: Flight | null,
+  elapsed: number,
+  launch: Throw | undefined,
+  options: FlightRenderOptions,
+): void {
+  const {hidePreview = false} = options;
+  c.clearRect(0, 0, 960, 600);
+  // 纸面底色 + 方格(作业本质感)
+  c.fillStyle = '#FAF6EE';
+  c.fillRect(0, 0, 960, 600);
+
+  // 视野:取所有轨迹的 x/z 包络,纵向(x)映射水平,横向(z)映射垂直
+  const paths: {points: {x: number; z: number}[]; color: string; dash: number[]; width: number}[] = [];
+  const samplePoints = (f: Flight, upto?: number) =>
+    f.samples.filter(s => upto === undefined || s.t <= upto).map(s => ({x: s.x, z: s.z ?? 0}));
+  if (!hidePreview && !actual) paths.push({points: samplePoints(preview), color: 'rgba(31,58,95,0.4)', dash: [6, 6], width: 1.5});
+  if (ghost) paths.push({points: samplePoints(ghost), color: 'rgba(107,114,128,0.55)', dash: [3, 5], width: 1.5});
+  if (actual) paths.push({points: samplePoints(actual, elapsed), color: '#1F3A5F', dash: [], width: 2});
+  const xs = paths.flatMap(p => p.points.map(q => q.x));
+  const zs = paths.flatMap(p => p.points.map(q => q.z));
+  const maxX = Math.max(10, ...xs, (launch ? Math.max(6, launch.speed * 2) : 6));
+  const maxZ = Math.max(4, ...zs.map(Math.abs), Math.abs(launch?.crosswind ?? 0) * 3);
+  const margin = 60;
+  const scale = Math.min((960 - margin * 2) / maxX, (600 - margin * 2) / (2 * maxZ + 4));
+  const mapX = (x: number) => margin + x * scale;
+  const mapZ = (z: number) => 300 + z * scale;
+
+  // 方格纸纹理:5 m 主格 + 1 m 细格
+  c.strokeStyle = '#C9DCEB';
+  for (let gx = 0; gx <= maxX; gx += 5) {
+    c.lineWidth = gx % 10 === 0 ? 1.2 : 0.6;
+    c.beginPath();
+    c.moveTo(mapX(gx), margin / 2);
+    c.lineTo(mapX(gx), 600 - margin / 2);
+    c.stroke();
+  }
+  for (let gz = -Math.ceil(maxZ / 5) * 5; gz <= Math.ceil(maxZ / 5) * 5; gz += 5) {
+    c.lineWidth = 1.2;
+    c.beginPath();
+    c.moveTo(margin / 2, mapZ(gz));
+    c.lineTo(960 - margin / 2, mapZ(gz));
+    c.stroke();
+  }
+  // 起飞线与刻度
+  c.strokeStyle = '#1F3A5F';
+  c.lineWidth = 2;
+  c.beginPath();
+  c.moveTo(mapX(0), margin / 2);
+  c.lineTo(mapX(0), 600 - margin / 2);
+  c.stroke();
+  c.fillStyle = '#6B7280';
+  c.font = '12px "IBM Plex Mono", monospace';
+  for (let gx = 0; gx <= maxX; gx += 10) {
+    c.fillText(`${gx}m`, mapX(gx) + 4, 600 - margin / 2 + 16);
+  }
+
+  // 风矢量(右上角):顺风/侧风合成方向
+  if (launch && (launch.wind !== 0 || (launch.crosswind ?? 0) !== 0)) {
+    const arrowScale = 10;
+    const wx = launch.wind * arrowScale;
+    const wz = (launch.crosswind ?? 0) * arrowScale;
+    const ox = 960 - 90;
+    const oy = 70;
+    c.strokeStyle = '#D9482B';
+    c.lineWidth = 2.5;
+    c.beginPath();
+    c.moveTo(ox, oy);
+    c.lineTo(ox + wx, oy + wz);
+    c.stroke();
+    const ang = Math.atan2(wz, wx);
+    c.beginPath();
+    c.moveTo(ox + wx, oy + wz);
+    c.lineTo(ox + wx - 9 * Math.cos(ang - 0.45), oy + wz - 9 * Math.sin(ang - 0.45));
+    c.lineTo(ox + wx - 9 * Math.cos(ang + 0.45), oy + wz - 9 * Math.sin(ang + 0.45));
+    c.closePath();
+    c.fillStyle = '#D9482B';
+    c.fill();
+    c.fillStyle = '#6B7280';
+    c.font = '11px "IBM Plex Mono", monospace';
+    c.fillText('风', ox - 16, oy + 4);
+  }
+
+  for (const path of paths) {
+    if (path.points.length < 2) continue;
+    c.strokeStyle = path.color;
+    c.lineWidth = path.width;
+    c.setLineDash(path.dash);
+    c.beginPath();
+    path.points.forEach((q, i) => (i ? c.lineTo(mapX(q.x), mapZ(q.z)) : c.moveTo(mapX(q.x), mapZ(q.z))));
+    c.stroke();
+    c.setLineDash([]);
+  }
+
+  // 当前位置 + 机头朝向
+  const current = actual
+    ? ([...actual.samples].reverse().find(s => s.t <= elapsed) ?? actual.samples[0])
+    : preview.samples[preview.samples.length - 1];
+  const cx = mapX(current.x);
+  const cz = mapZ(current.z ?? 0);
+  const psi = current.psi ?? 0;
+  c.save();
+  c.translate(cx, cz);
+  c.rotate(-psi); // 画布 z 向下为正,偏航右转为正 → 画布上逆时针旋转
+  c.fillStyle = '#1F3A5F';
+  c.beginPath();
+  c.moveTo(14, 0);
+  c.lineTo(-9, 7);
+  c.lineTo(-5, 0);
+  c.lineTo(-9, -7);
+  c.closePath();
+  c.fill();
+  c.restore();
+  // 位置圆点
+  c.fillStyle = actual ? '#D9482B' : '#1F3A5F';
+  c.beginPath();
+  c.arc(cx, cz, 3.5, 0, Math.PI * 2);
+  c.fill();
+
+  // 标题与说明
+  c.fillStyle = '#1F3A5F';
+  c.font = '13px "LXGW WenKai", "PingFang SC", sans-serif';
+  c.fillText('俯视 · 侧风漂移与机头朝向', margin / 2, 28);
+  if (actual) {
+    c.fillStyle = '#6B7280';
+    c.font = '12px "IBM Plex Mono", monospace';
+    c.fillText(`x ${current.x.toFixed(1)}m · z ${(current.z ?? 0).toFixed(1)}m · ψ ${(((current.psi ?? 0) * 180) / Math.PI).toFixed(0)}°`, margin / 2, 48);
+  }
+}
 
 export function flightLaunchAnchor(
   preview: Flight,
@@ -44,7 +183,12 @@ export function renderFlightCanvas(
   options: FlightRenderOptions = {},
 ): void {
   const c = canvas.getContext('2d')!;
-  const {hidePreview = false, followCamera = true, chargeState = null, paused = false} = options;
+  const {hidePreview = false, followCamera = true, chargeState = null, paused = false, topView = false} = options;
+  // v5 俯视模式:独立绘制分支,共用同一数据源
+  if (topView) {
+    renderTopDownView(c, preview, actual, ghost, elapsed, launch, options);
+    return;
+  }
   const {minX, maxX, maxY, sy, mapX, isFollowing} = computeFlightCamera(preview, actual, ghost, elapsed, {
     followCamera,
     hidePreview,

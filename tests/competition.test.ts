@@ -13,15 +13,20 @@ import {
 import {FLIGHT_MODEL_VERSION} from '../src/aero/integrator';
 
 describe('正式飞行比赛系统 (competition)', () => {
-  it('确定性风场种子在同场比赛与跨次重建中完全一致', () => {
+  it('确定性风场种子在同场比赛与跨次重建中完全一致（顺风/侧风成对）', () => {
     const w1 = generateRoundWinds(20261126, 3);
     const w2 = generateRoundWinds(20261126, 3);
     expect(w1).toEqual(w2);
     expect(w1).toHaveLength(3);
     for (const w of w1) {
-      expect(w).toBeGreaterThanOrEqual(-3);
-      expect(w).toBeLessThanOrEqual(3);
+      expect(w.head).toBeGreaterThanOrEqual(-3);
+      expect(w.head).toBeLessThanOrEqual(3);
+      expect(w.cross).toBeGreaterThanOrEqual(-3);
+      expect(w.cross).toBeLessThanOrEqual(3);
     }
+    // v5:同一种子两次生成交错消耗随机数,但整体序列确定
+    const w3 = generateRoundWinds(20261126, 4);
+    expect(w3.slice(0, 3)).toEqual(w1);
   });
 
   it('2人3回合距离赛完整流转：锁定环境、轮流投掷、取最佳有效成绩并正确排名', () => {
