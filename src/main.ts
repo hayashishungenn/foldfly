@@ -137,7 +137,16 @@ let followCamera = true;
 let flightPaused = false;
 let pausedElapsed = 0;
 let chargeState: {anchor: CanvasPoint; pointer: CanvasPoint; result: DragThrowResult} | null = null;
-let playbackRate = 1;
+/** 回放倍率;e2e 可经 sessionStorage('fly-rate') 提速(1–50),正常用户恒为 1。 */
+const E2E_PLAYBACK_RATE = (() => {
+  try {
+    const saved = Number(sessionStorage.getItem('fly-rate'));
+    return Number.isFinite(saved) && saved >= 1 && saved <= 50 ? saved : 1;
+  } catch {
+    return 1;
+  }
+})();
+let playbackRate = E2E_PLAYBACK_RATE;
 let playStart = 0;
 let animation = 0;
 let angle = 20;
@@ -279,7 +288,7 @@ if (shared) {
   wind = shared.wind;
   plane = shared.plane;
   step = currentPlane().steps.length;
-  gotoStage('flight');
+  stage = 'flight'; // 启动初始化:与 #design= 同理,直接赋值(此时 render 尚不可调用)
   challenge = shared.challenge ?? 'distance';
 }
 
@@ -1089,7 +1098,7 @@ function render() {
 
   const compBannerHtml = isOfficialActive
     ? reviewing
-      ? `<div class="comp-banner"><div><strong>上一投结果 · 第 ${reviewing.round} 轮 · ${escapeHtml(reviewing.plane ? planes[reviewing.plane].name : '')}</strong><br><span>${reviewing.valid ? `有效成绩 ${reviewing.score!.toFixed(2)} ${activeMatch!.event === 'duration' ? 's' : 'm'}` : `无效:${reviewing.invalidReason}`} · 风场 ${reviewing.launch.wind >= 0 ? '+' : ''}${reviewing.launch.wind.toFixed(1)} / 侧风 ${reviewing.launch.crosswind ?? 0 >= 0 ? '+' : ''}${(reviewing.launch.crosswind ?? 0).toFixed(1)} m/s · 回放与诊断均使用该投掷的配置</span></div><button type="button" id="comp-next-turn">${activeMatch!.status === 'finished' ? '查看冠军结算 →' : '下一位选手 →'}</button></div>`
+      ? `<div class="comp-banner"><div><strong>上一投结果 · 第 ${reviewing.round} 轮 · ${escapeHtml(reviewing.plane ? planes[reviewing.plane].name : '')}</strong><br><span>${reviewing.valid ? `有效成绩 ${reviewing.score!.toFixed(2)} ${activeMatch!.event === 'duration' ? 's' : 'm'}` : `无效:${reviewing.invalidReason}`} · 风场 ${reviewing.launch.wind >= 0 ? '+' : ''}${reviewing.launch.wind.toFixed(1)} / 侧风 ${reviewing.launch.crosswind ?? 0 >= 0 ? '+' : ''}${(reviewing.launch.crosswind ?? 0).toFixed(1)} m/s · 回放与诊断均使用该投掷的配置</span></div><button type="button" id="comp-review-next">${activeMatch!.status === 'finished' ? '查看冠军结算 →' : '下一位选手 →'}</button></div>`
       : activeTurn
       ? `<div class="comp-banner"><div><strong>第 ${activeTurn.round} / ${activeMatch!.rounds} 轮 · ${escapeHtml(activeTurn.player.name)}（${activePlaneDef.name}）</strong><br><span>${activeMatch!.event === 'distance' ? '距离赛' : activeMatch!.event === 'accuracy' ? `精准赛 · 靶线 ${activeMatch!.accuracyTarget?.toFixed(1) ?? '?'} m` : '滞空赛'} · 锁定环境 ${activeSheet.name} ${activeGsm}g ${paperGrade(activeGrade).name} · 本轮风场 ${activeTurn.wind >= 0 ? '+' : ''}${activeTurn.wind.toFixed(1)} / 侧风 ${activeTurn.crosswind >= 0 ? '+' : ''}${activeTurn.crosswind.toFixed(1)} m/s · 种子 #${activeMatch!.seed}</span></div><button type="button" id="comp-abort">中途退赛</button></div>`
       : `<div class="comp-banner"><div><strong>全部 ${activeMatch!.rounds} 轮投掷已完成！</strong><br><span>点击下方「查看冠军结算 →」进入排行榜与轨迹对比</span></div><button type="button" id="comp-abort">返回配置</button></div>`
@@ -1127,7 +1136,7 @@ function render() {
     flightPaused = false;
     pausedElapsed = 0;
     chargeState = null;
-    playbackRate = 1;
+    playbackRate = E2E_PLAYBACK_RATE;
     if (flight) previousFlight = flight;
     activeGhost = isOfficialActive || flightDesign ? null : getGhost(challenge);
     const launchCfg = buildThrowConfig();
@@ -1233,26 +1242,25 @@ function render() {
       render();
     };
   }
-  const compNextTurnBtn = document.querySelector<HTMLButtonElement>('#comp-next-turn');
-  if (compNextTurnBtn) {
-    compNextTurnBtn.onclick = () => {
-      sound.wind(0);
-      if (!activeMatch) return;
-      flight = null;
-      compLastRecord = null;
-      compThrowRecorded = false;
-      if (activeMatch.status === 'finished') {
-        gotoStage('settlement');
-      } else {
-        const nextT = currentTurn(activeMatch);
-        if (nextT) {
-          angle = planes[nextT.player.plane].recommendation.angle;
-          speed = planes[nextT.player.plane].recommendation.speed;
-        }
+  // 回看横幅与操作行的“下一位”按钮共享同一处理器(治理 1.11:e2e 曾抓到重复 ID 死按钮)
+  const nextTurnHandler = () => {
+    sound.wind(0);
+    if (!activeMatch) return;
+    flight = null;
+    compLastRecord = null;
+    compThrowRecorded = false;
+    if (activeMatch.status === 'finished') {
+      gotoStage('settlement');
+    } else {
+      const nextT = currentTurn(activeMatch);
+      if (nextT) {
+        angle = planes[nextT.player.plane].recommendation.angle;
+        speed = planes[nextT.player.plane].recommendation.speed;
       }
-      render();
-    };
-  }
+    }
+    render();
+  };
+  document.querySelectorAll<HTMLButtonElement>('#comp-next-turn, #comp-review-next').forEach(btn => (btn.onclick = nextTurnHandler));
 
   const careerExitBtn = document.querySelector<HTMLButtonElement>('#career-exit');
   if (careerExitBtn) {
@@ -1463,7 +1471,7 @@ function render() {
       landingSoundPlayed = false;
       flightPaused = false;
       pausedElapsed = 0;
-      playbackRate = 0.4;
+      playbackRate = 0.4; // 慢动作回放显式半速以下,与 e2e 提速互斥
       playStart = performance.now();
       render();
     };

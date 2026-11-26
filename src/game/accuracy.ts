@@ -1,4 +1,4 @@
-import {seededRandom} from './competition';
+import {seededRandom} from './winds';
 
 /**
  * 精准着陆赛(Phase 07):落点相对靶线的垂直偏差计分,纯物理可算,

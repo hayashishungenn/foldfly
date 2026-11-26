@@ -75,36 +75,11 @@ export type CompetitionPersonalBest = {
   recordedAt: string;
 };
 
-/** Deterministic Mulberry32 PRNG for reproducible competition wind fields. */
-export function seededRandom(seed: number): () => number {
-  let a = seed >>> 0;
-  return () => {
-    a = (a + 0x6d2b79f5) >>> 0;
-    let t = Math.imul(a ^ (a >>> 15), 1 | a);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
-/** Per-round locked wind: head/tail along +x, crosswind along +z. */
-export type RoundWind = {head: number; cross: number};
-
-/**
- * Generate deterministic per-round winds in [-3, +3] m/s (0.5 m/s steps).
- * The first draw of each round is the head/tail component and preserves the
- * historical single-draw sequence; the second draw is the crosswind (v5).
- */
-export function generateRoundWinds(seed: number, rounds = 3): RoundWind[] {
-  const rand = seededRandom(seed);
-  const winds: RoundWind[] = [];
-  for (let i = 0; i < rounds; i++) {
-    // Integer steps -6..+6 -> -3.0..+3.0 m/s in 0.5 m/s increments
-    const head = (Math.floor(rand() * 13) - 6) * 0.5;
-    const cross = (Math.floor(rand() * 13) - 6) * 0.5;
-    winds.push({head, cross});
-  }
-  return winds;
-}
+// 确定性风场与随机源已迁至叶子模块 winds.ts(打断 accuracy↔competition 循环导入);
+// 此处仅向后兼容地再导出。
+export {seededRandom, generateRoundWinds} from './winds';
+export type {RoundWind} from './winds';
+import {generateRoundWinds, type RoundWind} from './winds';
 
 export function createCompetitionMatch(config: {
   event: CompetitionEvent;

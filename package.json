@@ -7,9 +7,12 @@
     "build": "tsc --noEmit && vite build",
     "test": "vitest run",
     "calibrate": "vite-node scripts/calibrate.ts",
-    "aero-report": "vite-node scripts/aero-report.ts"
+    "aero-report": "vite-node scripts/aero-report.ts",
+    "e2e": "playwright test"
   },
   "devDependencies": {
+    "@playwright/test": "^1.65.1",
+    "playwright": "^1.65.1",
     "typescript": "^5.7.3",
     "vite": "^6.1.0",
     "vitest": "^3.0.5"
