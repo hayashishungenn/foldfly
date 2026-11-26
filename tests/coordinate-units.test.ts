@@ -90,7 +90,7 @@ describe('坐标系与单位(Phase 02 / 2.2)', () => {
     const aero = extract(replay(sheet, program.length, program), 80);
     expect(aero.cg.y).toBeGreaterThanOrEqual(aero.noseY);
     expect(aero.cg.y - aero.noseY).toBeGreaterThan(0);
-    // 机身层投影 x=|x−center| 位于纸张中线一侧
-    expect(aero.bodyAxisX === undefined).toBe(true); // 标准尖头机走 2D 投影路径
+    // 标准尖头机走 2D 投影路径:机身层投影 x=|x−center| 保留在中线一侧
+    expect(aero.bodySideArea).toBeGreaterThan(0);
   });
 });

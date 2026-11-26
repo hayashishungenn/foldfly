@@ -1,12 +1,21 @@
 import type {Aero} from './extract';
 import {coefficients, pitchAcceleration} from './model';
 import {creaseCrispness} from '../paper/material';
+import {defaultEnvironment, prepareSolver, solveAero, type Environment, type SolverContext, type AeroSolution} from './solver';
 import type {MaterialProfile} from '../paper/material';
 
 /** Increment when gameplay physics changes enough to alter shared trajectories. */
 export const FLIGHT_MODEL_VERSION = 5;
 export type Throw = {angle: number; speed: number; wind: number; crosswind?: number};
-export type Sample = {t: number; x: number; y: number; pitch: number; z?: number; psi?: number; phi?: number};
+export type Sample = {
+  t: number; x: number; y: number; pitch: number;
+  z?: number; psi?: number; phi?: number;
+  /** 统一遥测(2.10):实际参与积分的状态与气动力,避免低频位置差分反推 */
+  vx?: number; vy?: number; vz?: number;
+  alpha?: number; beta?: number; airSpeed?: number;
+  q?: number; cl?: number; cd?: number;
+  ax?: number; ay?: number; az?: number;
+};
 /** Alternate rates are for numerical verification; gameplay uses 240 Hz. */
 export type SimulationOptions = {
   pitchModel?: 'empirical' | 'geometry';
@@ -19,6 +28,8 @@ export type SimulationOptions = {
   material?: MaterialProfile;
   /** 侧风阵风相位种子(v5)。缺省 0,同一输入完全可复现。 */
   windSeed?: number;
+  /** 2.12:结构化环境覆盖(垂直风/密度/黏度的实验输入),参与实际求解。 */
+  environment?: Partial<Environment>;
 };
 export type Flight = {
   samples: Sample[];
@@ -29,6 +40,28 @@ export type Flight = {
   /** v5:落点横向偏移(右侧为正);无侧风时为 0。 */
   drift?: number;
 };
+
+/** 采样点写入实际积分状态与统一求解器输出(2.10)。 */
+function makeSample(
+  t: number, x: number, y: number, pitch: number, z: number, psi: number, phi: number,
+  velocity: {x: number; y: number; z: number},
+  ctx: SolverContext, env: Environment, time: number,
+): Sample {
+  const sol = solveAero(ctx, {
+    position: {x, y, z}, velocity,
+    attitude: {pitch, yaw: psi, roll: phi},
+    angularVelocity: {pitch: 0, yaw: 0, roll: 0},
+    time,
+  }, env);
+  const f = sol.totalAerodynamicForce;
+  return {
+    t, x, y, pitch, z, psi, phi,
+    vx: velocity.x, vy: velocity.y, vz: velocity.z,
+    alpha: sol.alpha, beta: sol.beta, airSpeed: sol.relativeSpeed,
+    q: sol.dynamicPressure, cl: sol.cl, cd: sol.cd,
+    ax: f.x / ctx.aero.mass, ay: f.y / ctx.aero.mass - 9.81, az: f.z / ctx.aero.mass,
+  };
+}
 
 function smoothstep(edge0: number, edge1: number, x: number): number {
   const t = Math.max(0, Math.min(1, (x - edge0) / (edge1 - edge0)));
@@ -67,6 +100,19 @@ export function simulate(a: Aero, input: Throw, options: SimulationOptions = {})
   if (!Number.isInteger(hz) || hz < 60 || hz > 1920 || hz % 30 !== 0) {
     throw new Error('积分频率必须是 60–1920 内的 30 的倍数');
   }
+  const solverCtx: SolverContext = prepareSolver(a, {
+    dragModel: options.dragModel,
+    experimentalHeightMoment: options.experimentalHeightMoment,
+    foldQuality: options.foldQuality,
+    ...(options.material ? {material: options.material} : {}),
+  });
+  const env: Environment = {
+    ...defaultEnvironment(),
+    wind: input.wind,
+    crosswind,
+    seed: windSeed,
+    ...options.environment,
+  };
   const dt = 1 / hz;
   const launchHeight = 1.5;
   const rad = (input.angle * Math.PI) / 180;
@@ -93,51 +139,36 @@ export function simulate(a: Aero, input: Throw, options: SimulationOptions = {})
   const slenderness = a.chord / Math.max(1e-6, a.span);
   const bodyRatio = (a.bodySideArea ?? 0) / Math.max(1e-6, a.wingArea);
 
-  // Blunt folded-leading-edge camber indicator (0 for pointed dart fullness=0.592, ~1 for folded-nose planes)
-  const cambered = options.dragModel === 'skin-friction' || options.experimentalHeightMoment ? 0 : smoothstep(0.61, 0.655, fullness);
-  // High-AR low-SM indoor endurance glider mode (Sky King)
-  const enduranceMode = cambered * smoothstep(1.45, 1.68, ar) * smoothstep(0.062, 0.042, sm);
-  // High-SM slender penetrator mode (Mach 5)
-  const penetratorMode = cambered * smoothstep(0.095, 0.120, sm) * smoothstep(1.08, 1.40, slenderness);
-  // Broad-wing distance glider mode (Suzanne)
-  const distanceGliderMode =
-    cambered * (1 - enduranceMode) * (1 - penetratorMode) * smoothstep(0.92, 1.04, slenderness) * smoothstep(0.088, 0.068, sm);
-
-  const clSlope = (Math.PI * ar) / (1 + Math.sqrt(1 + (ar / 2) ** 2));
-
-  // v4 折痕质量与材质定形通道(披露见 docs/AERO-AUDIT.md):
-  // - foldQuality<1:折痕不齐 → 升力小幅损失 + 阻力放大;作用于全部机型(含未拱度尖头机)。
-  // - 材质折痕利落度 × 折痕质量 → 翼面定形保持 shapeKeep,只允许退化或持平:理想几何
-  //   是上界,更挺括的纸不产生超理想增益(几何驱动原则)。
-  // - foldQuality=1 且缺省材质时全部因子为 1。
+  // v4 逐位兼容的纵向快速路径门控(与 solver.prepareSolver 同源公式,此处保留原运算顺序)
   const quality = options.foldQuality ?? 1;
-  if (!Number.isFinite(quality) || quality < 0 || quality > 1) throw new Error('折痕质量必须是 [0,1] 内的有限数');
-  const crispNorm = options.material ? creaseCrispness(options.material.grade.id) / creaseCrispness('copy') : 1;
-  const shapeKeep = Math.min(1, quality * crispNorm);
+  const cambered = (() => {
+    const fullness = a.wingArea / Math.max(1e-6, a.span * a.chord);
+    const t = Math.max(0, Math.min(1, (fullness - 0.61) / 0.045));
+    return options.dragModel === 'skin-friction' || options.experimentalHeightMoment ? 0 : t * t * (3 - 2 * t);
+  })();
+  const enduranceMode = (() => {
+    const ar = a.aspectRatio, sm = (a.aerodynamicCenter.y - a.cg.y) / Math.max(1e-6, a.chord);
+    const st = (e0: number, e1: number, x: number) => { const t = Math.max(0, Math.min(1, (x - e0) / (e1 - e0))); return t * t * (3 - 2 * t); };
+    return cambered * st(1.45, 1.68, ar) * st(0.062, 0.042, sm);
+  })();
+  const penetratorMode = (() => {
+    const sm = (a.aerodynamicCenter.y - a.cg.y) / Math.max(1e-6, a.chord), sl = a.chord / Math.max(1e-6, a.span);
+    const st = (e0: number, e1: number, x: number) => { const t = Math.max(0, Math.min(1, (x - e0) / (e1 - e0))); return t * t * (3 - 2 * t); };
+    return cambered * st(0.095, 0.12, sm) * st(1.08, 1.4, sl);
+  })();
+  const distanceGliderMode = (() => {
+    const sm = (a.aerodynamicCenter.y - a.cg.y) / Math.max(1e-6, a.chord), sl = a.chord / Math.max(1e-6, a.span);
+    const st = (e0: number, e1: number, x: number) => { const t = Math.max(0, Math.min(1, (x - e0) / (e1 - e0))); return t * t * (3 - 2 * t); };
+    return cambered * (1 - enduranceMode) * (1 - penetratorMode) * st(0.92, 1.04, sl) * st(0.088, 0.068, sm);
+  })();
+  const shapeKeep = (() => {
+    const crisp = options.material ? creaseCrispness(options.material.grade.id) / creaseCrispness('copy') : 1;
+    return Math.min(1, quality * crisp);
+  })();
   const forceScale = {lift: 1 - 0.1 * (1 - quality), drag: 1 + 0.25 * (1 - quality)};
-
-  // v5 侧向导数(全部为几何推导或标注过的工程估计):
-  const spanSafe = Math.max(1e-4, a.span);
-  // 平板侧向力系数(机身 + 龙骨,工程估计)
-  const cyBeta = 1.1 * (1 + 0.5 * Math.min(1, bodyRatio));
-  // 平板尾鳍升力斜率(低展弦比 2π·2/(2+2)=π)× 尾鳍体积/(S·b)
-  const cnBeta = Math.PI * ((a.keelAftArea ?? 0) * (a.keelAftLever ?? 0)) / Math.max(1e-6, a.wingArea * spanSafe);
-  // 尾鳍在偏航率下产生的附加侧滑提供阻尼:N_damp ∝ Cnβ·(2·l_t/b)
-  const cnrFin = -2 * cnBeta * ((a.keelAftLever ?? 0) / spanSafe);
-  // 翼面侧向阻尼(俯仰阻尼 wingPitchSecondMoment 的侧向类比):偏航率使展向
-  // 剖面 ℓ 处看到侧向流速 r·ℓ/V,反对称侧力产生阻尼力矩。展向二阶矩归一
-  // (b²/12)/(b²/4)=1/3,系数取平板侧力斜率 cyBeta。
-  const cnrWing = -cyBeta / 3;
-  const cnrNorm = cnrFin + cnrWing;
-  // 龙骨面积在重心上方 → 侧滑产生横滚恢复(钟摆 + 上反等效)
-  const clBeta = -1.1 * ((a.bodySideArea ?? 0) * Math.max(0, a.cgDepth)) / Math.max(1e-6, a.wingArea * spanSafe);
-  // 平板机翼滚转阻尼工程估计
-  const clpNorm = -2.2 * (ar / (ar + 1.5));
-  // 翼面质量向翼尖分布的惯性代理
-  const rollInertia = Math.max(1e-12, a.mass * (spanSafe / 4) ** 2);
-  const yawInertia = Math.max(1e-12, a.pitchInertia + a.mass * (spanSafe / 4) ** 2);
-
-  const samples: Sample[] = [{t, x, y, pitch, z, psi, phi}];
+  // 配平用有限翼斜率(与 model.ts 俯仰阻尼斜率不同,两者不可混用)
+  const clSlope = (Math.PI * a.aspectRatio) / (1 + Math.sqrt(1 + (a.aspectRatio / 2) ** 2));
+  const samples: Sample[] = [makeSample(t, x, y, pitch, z, psi, phi, {x: vx, y: vy, z: vz}, solverCtx, env, t)];
   for (let i = 0; i < hz * 60; i++) {
     const oldX = x;
     const oldY = y;
@@ -149,13 +180,14 @@ export function simulate(a: Aero, input: Throw, options: SimulationOptions = {})
     if ((options.pitchModel ?? 'geometry') === 'geometry') {
       // Midpoint integration evaluates coupled forces and torques at the same
       // intermediate state, avoiding a first-order phase error in rotation.
+      // 统一气动力入口(Phase 02 / 2.5):积分器不再内嵌升阻力公式
       const derivative = (dvx: number, dvy: number, dvz: number, theta: number, rate: number, dPsi: number, dYawRate: number, dPhi: number, dRollRate: number, alt: number, time: number) => {
         // 侧风阵风:确定性正弦,仅在侧风非零时启用
         const gustPhase = 2 * Math.PI * 0.4 * time + windSeed * 0.7;
         const wz = crosswind === 0 ? 0 : crosswind * (1 + 0.3 * Math.sin(gustPhase));
         const vax = dvx - input.wind;
         const vaz = dvz - wz;
-        const vw = dvy;
+        const vw = dvy - (env.verticalWind ?? 0);
         // 纵向快速路径:侧向量全部恒为零时复现 v4 标量公式(逐位一致)
         const lateralActive = dvz !== 0 || dPsi !== 0 || dPhi !== 0 || dYawRate !== 0 || dRollRate !== 0 || vaz !== 0;
         if (!lateralActive) {
@@ -163,7 +195,7 @@ export function simulate(a: Aero, input: Throw, options: SimulationOptions = {})
           const gamma = Math.atan2(vw, vax);
           const alpha = Math.atan2(Math.sin(theta - gamma), Math.cos(theta - gamma));
           const base = coefficients(alpha, a, v, options.dragModel);
-          const q = 0.5 * 1.225 * v * v * a.wingArea;
+          const q = 0.5 * env.density * v * v * a.wingArea;
           if (cambered === 0 || v < 1e-4) {
             const cl = base.cl * forceScale.lift;
             const cd = base.cd * forceScale.drag;
@@ -223,97 +255,22 @@ export function simulate(a: Aero, input: Throw, options: SimulationOptions = {})
           };
         }
 
-        // === v5 3D 路径:机体坐标系分解(全工况连续) ===
-        const vHoriz = Math.hypot(vax, vaz);
-        const v = Math.hypot(vHoriz, vw);
-        // 纵向模式门控使用的铅垂平面航迹角(平滑无奇点)
-        const gamma = Math.atan2(vw, vHoriz);
-        const cosYaw = Math.cos(dPsi), sinYaw = Math.sin(dPsi);
-        const cosT = Math.cos(theta), sinT = Math.sin(theta);
-        const nx = cosT * cosYaw, ny = sinT, nz = cosT * sinYaw;
-        // 机体右轴 = 偏航旋转后的 (0,0,1):正 ψ(机头向 +z 右转)时右翼向后摆。
-        const rx = -sinYaw, ry = 0, rz = cosYaw;
-        const bx = -sinT * cosYaw, by = cosT, bz = -sinT * sinYaw;
-        const vbF = vax * nx + vw * ny + vaz * nz;
-        const vbR = vax * rx + vw * ry + vaz * rz;
-        const vbU = vax * bx + vw * by + vaz * bz;
-        const alpha = Math.atan2(-vbU, vbF);
-        const beta = Math.atan2(vbR, vbF);
-        const base = coefficients(alpha, a, v, options.dragModel);
-        const q = 0.5 * 1.225 * v * v * a.wingArea;
-        let cl: number;
-        let cd: number;
-        let trim = 0;
-        let effectiveRate = rate;
-        if (cambered === 0 || v < 1e-4) {
-          cl = base.cl * forceScale.lift;
-          cd = base.cd * forceScale.drag;
-        } else {
-          const speedGate = (v * v) / (v * v + 0.08);
-          const attached = Math.exp(-((alpha / 0.24) ** 2)) * speedGate;
-          const climbUnload = smoothstep(0.24, -0.02, gamma);
-          const shallowGlide = smoothstep(-1.0, -0.30, vw) * smoothstep(3.4, 2.5, alt);
-          const activeEndurance = enduranceMode * smoothstep(0.08, -0.02, gamma) * shallowGlide;
-          const slowEndurance = activeEndurance * Math.exp(-((v / 3.4) ** 2)) * attached * shapeKeep;
-          const clCamber = 1.92 * slowEndurance;
-          cl = (base.cl + clCamber) * forceScale.lift;
-          const steepClimbPenalty =
-            (1 - penetratorMode) * (1 - enduranceMode) * smoothstep(0.016, 0.22, gamma) * 0.024;
-          const weightSupport = 0.76 + 0.0512 * distanceGliderMode - 0.0285 * penetratorMode + 0.224 * slowEndurance;
-          const neededCl = Math.max(0, (a.mass * 9.81 * Math.max(0.2, Math.cos(gamma)) * weightSupport) / Math.max(1e-4, q) - clCamber);
-          const alphaEq = neededCl / clSlope;
-          const maxTrim = 0.10 + 0.12 * slowEndurance;
-          const glideTrim = Math.min(maxTrim, alphaEq);
-          trim = cambered * speedGate * (climbUnload * glideTrim + steepClimbPenalty);
-          const highSpeedEnduranceBrake =
-            enduranceMode * (smoothstep(2.0, 3.8, v) * 0.035 + smoothstep(0.35, 0.50, gamma) * 0.55);
-          const overSteepPenetrator = penetratorMode * smoothstep(0.70, 0.92, gamma) * 0.12;
-          const finenessPenalty = 1 + 0.45 * Math.max(0, 1.05 - slenderness) + 0.25 * bodyRatio;
-          const cd0Clean =
-            (0.0165 - 0.0031 * distanceGliderMode + 0.00090 * penetratorMode - 0.0138 * slowEndurance) *
-              finenessPenalty *
-              (1 + 0.2 * (1 - shapeKeep)) +
-            highSpeedEnduranceBrake +
-            overSteepPenetrator;
-          const eOswald =
-            (0.80 + 0.15 * distanceGliderMode + 0.05 * penetratorMode + 7.20 * slowEndurance) * (1 - 0.15 * (1 - shapeKeep));
-          const cdClean = (cd0Clean + (cl * cl) / (Math.PI * ar * eOswald)) * forceScale.drag;
-          const climbDragOpen =
-            (1 - penetratorMode) * (1 - enduranceMode) * smoothstep(0.016, 0.22, gamma) * 0.62;
-          const cdBlend = cambered * attached * (1 - climbDragOpen);
-          cd = base.cd * (1 - cdBlend) + cdClean * cdBlend;
-          const ayApprox = (v ? (((-cd * vw + cl * vax) / v) * q) / a.mass : 0) - 9.81;
-          const axApprox = v ? (((-cd * vax - cl * vw) / v) * q) / a.mass : 0;
-          const gammaDot = (vax * ayApprox - vw * axApprox) / (v * v + 2.5);
-          effectiveRate = rate - cambered * climbUnload * 0.85 * gammaDot;
-        }
-        // 机体坐标合力:升力 = 机体上方在垂直于空速平面内的分量,阻力逆空速,
-        // 侧力反向于机体右侧;力矩按 sin(β) 全圆周形式保持倒飞连续。
-        const liftV = q * cl;
-        const dragV = q * cd;
-        const sideV = q * cyBeta * Math.sin(beta);
-        const e1x = vax / v, e1y = vw / v, e1z = vaz / v;
-        const proj = vbU / v;
-        let lx = bx - proj * e1x, ly = by - proj * e1y, lz = bz - proj * e1z;
-        const ln = Math.hypot(lx, ly, lz);
-        if (ln > 1e-9) { lx /= ln; ly /= ln; lz /= ln; } else { lx = bx; ly = by; lz = bz; }
-        const cosP = Math.cos(dPhi);
-        const sinP = Math.sin(dPhi);
-        const fx3 = liftV * (cosP * lx + sinP * rx) - dragV * e1x - sideV * rx;
-        const fy3 = liftV * (cosP * ly + sinP * ry) - dragV * e1y;
-        const fz3 = liftV * (cosP * lz + sinP * rz) - dragV * e1z - sideV * rz;
-        const qMoment = 0.5 * 1.225 * v * v * a.wingArea * spanSafe;
-        const yawMoment = qMoment * (cnBeta * Math.sin(beta) + cnrNorm * (dYawRate * spanSafe / (2 * Math.max(v, 0.5))));
-        const rollMoment =
-          qMoment * (clBeta * Math.sin(beta) + clpNorm * (dRollRate * spanSafe / (2 * Math.max(v, 0.5)))) -
-          a.mass * 9.81 * Math.max(0, a.cgDepth) * Math.sin(dPhi);
+        const solution = solveAero(solverCtx, {
+          position: {x, y: alt, z},
+          velocity: {x: dvx, y: dvy, z: dvz},
+          attitude: {pitch: theta, yaw: dPsi, roll: dPhi},
+          angularVelocity: {pitch: rate, yaw: dYawRate, roll: dRollRate},
+          time,
+        }, env);
+        const f = solution.totalAerodynamicForce;
         return {
-          ax: fx3 / a.mass,
-          ay: fy3 / a.mass - 9.81,
-          az: fz3 / a.mass,
-          angular: pitchAcceleration(alpha - trim, effectiveRate, v, a, options.dragModel, options.experimentalHeightMoment, forceScale),
-          yawAcc: yawMoment / yawInertia,
-          rollAcc: rollMoment / rollInertia,
+          ax: f.x / a.mass,
+          ay: f.y / a.mass - 9.81,
+          az: f.z / a.mass,
+          angular: solution.pitchMoment / a.pitchInertia,
+          yawAcc: solution.yawMoment / solverCtx.gates.yawInertia,
+          rollAcc: solution.rollMoment / solverCtx.gates.rollInertia,
+          solution,
         };
       };
       const start = derivative(vx, vy, vz, pitch, omega, psi, yawRate, phi, rollRate, y, t);
@@ -358,9 +315,9 @@ export function simulate(a: Aero, input: Throw, options: SimulationOptions = {})
       while (alpha > Math.PI) alpha -= 2 * Math.PI;
       while (alpha < -Math.PI) alpha += 2 * Math.PI;
       const {cl, cd} = coefficients(alpha, a, v, options.dragModel);
-      const clE = cl * forceScale.lift;
-      const cdE = cd * forceScale.drag;
-      const q = 0.5 * 1.225 * v * v * a.wingArea;
+      const clE = cl * solverCtx.gates.forceLift;
+      const cdE = cd * solverCtx.gates.forceDrag;
+      const q = 0.5 * env.density * v * v * a.wingArea;
       const fx = v ? ((-cdE * ux - clE * uy) / v) * q : 0;
       const fy = v ? ((-cdE * uy + clE * ux) / v) * q : 0;
       vx += (fx / a.mass) * dt;
@@ -377,7 +334,7 @@ export function simulate(a: Aero, input: Throw, options: SimulationOptions = {})
     // Preserve a local maximum even when it falls between 30 Hz display
     // samples, so playback can show the same peak used by the result.
     if (oldY >= height && y < oldY && oldT > samples[samples.length - 1].t) {
-      samples.push({t: oldT, x: oldX, y: oldY, pitch: oldPitch, z: oldZ, psi: oldPsi, phi: oldPhi});
+      samples.push(makeSample(oldT, oldX, oldY, oldPitch, oldZ, oldPsi, oldPhi, {x: vx, y: vy, z: vz}, solverCtx, env, oldT));
     }
     height = Math.max(height, y);
     if (y <= 0) {
@@ -390,10 +347,10 @@ export function simulate(a: Aero, input: Throw, options: SimulationOptions = {})
       phi = oldPhi + (phi - oldPhi) * fraction;
       y = 0;
       landed = true;
-      samples.push({t, x, y, pitch, z, psi, phi});
+      samples.push(makeSample(t, x, y, pitch, z, psi, phi, {x: vx, y: vy, z: vz}, solverCtx, env, t));
       break;
     }
-    if (i % (hz / 30) === 0) samples.push({t, x, y, pitch, z, psi, phi});
+    if (i % (hz / 30) === 0) samples.push(makeSample(t, x, y, pitch, z, psi, phi, {x: vx, y: vy, z: vz}, solverCtx, env, t));
   }
   return {samples, distance: Math.hypot(x, z), duration: t, height, landed, drift: z};
 }

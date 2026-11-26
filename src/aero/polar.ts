@@ -1,6 +1,6 @@
 import type {Aero} from './extract';
 import {simulate, type Flight, type Throw} from './integrator';
-import {coefficients} from './model';
+import {defaultEnvironment, prepareSolver, solveAero, type SolverContext} from './solver';
 
 export type PolarPoint = {
   alphaDeg: number;
@@ -124,37 +124,26 @@ function smoothstep(edge0: number, edge1: number, x: number): number {
  * and airspeed `v` (m/s), including the geometry-derived folded-leading-edge camber
  * and Oswald efficiency from the flight integrator.
  */
+const solverContexts = new WeakMap<Aero, SolverContext>();
+
+/**
+ * 条件化参考系数(2.11):固定水平姿态、高度 1.5 m、无角速度的稳态参考曲线,
+ * 由统一求解器给出;**不是任意时刻的非定常实时气动力**(那由 Flight.samples 记录)。
+ */
 export function effectiveCoefficients(alpha: number, a: Aero, v = 6): {cl: number; cd: number} {
-  const base = coefficients(alpha, a, v);
-  const fullness = a.wingArea / Math.max(1e-6, a.span * a.chord);
-  const sm = (a.aerodynamicCenter.y - a.cg.y) / Math.max(1e-6, a.chord);
-  const ar = a.aspectRatio;
-  const slenderness = a.chord / Math.max(1e-6, a.span);
-  const bodyRatio = (a.bodySideArea ?? 0) / Math.max(1e-6, a.wingArea);
-
-  const cambered = smoothstep(0.61, 0.655, fullness);
-  if (cambered === 0) return base;
-
-  const enduranceMode = cambered * smoothstep(1.45, 1.68, ar) * smoothstep(0.062, 0.042, sm);
-  const penetratorMode = cambered * smoothstep(0.095, 0.12, sm) * smoothstep(1.08, 1.4, slenderness);
-  const distanceGliderMode =
-    cambered * (1 - enduranceMode) * (1 - penetratorMode) * smoothstep(0.92, 1.04, slenderness) * smoothstep(0.088, 0.068, sm);
-
-  const speedGate = (v * v) / (v * v + 0.08);
-  const attached = Math.exp(-((alpha / 0.24) ** 2)) * speedGate;
-  const slowEndurance = enduranceMode * Math.exp(-((v / 3.4) ** 2)) * attached;
-  const cl = base.cl + 1.92 * slowEndurance;
-
-  const highSpeedEnduranceBrake = enduranceMode * smoothstep(2.0, 3.8, v) * 0.035;
-  const finenessPenalty = 1 + 0.45 * Math.max(0, 1.05 - slenderness) + 0.25 * bodyRatio;
-  const cd0Clean =
-    (0.0165 - 0.0031 * distanceGliderMode + 0.0009 * penetratorMode - 0.0138 * slowEndurance) * finenessPenalty +
-    highSpeedEnduranceBrake;
-  const eOswald = 0.8 + 0.15 * distanceGliderMode + 0.05 * penetratorMode + 7.2 * slowEndurance;
-  const cdClean = cd0Clean + (cl * cl) / (Math.PI * ar * eOswald);
-  const cdBlend = cambered * attached;
-  const cd = base.cd * (1 - cdBlend) + cdClean * cdBlend;
-  return {cl, cd};
+  let ctx = solverContexts.get(a);
+  if (!ctx) {
+    ctx = prepareSolver(a, {});
+    solverContexts.set(a, ctx);
+  }
+  const sol = solveAero(ctx, {
+    position: {x: 0, y: 1.5, z: 0},
+    velocity: {x: Math.max(0, v), y: 0, z: 0},
+    attitude: {pitch: alpha, yaw: 0, roll: 0},
+    angularVelocity: {pitch: 0, yaw: 0, roll: 0},
+    time: 0,
+  }, defaultEnvironment());
+  return {cl: sol.cl, cd: sol.cd};
 }
 
 /**

@@ -21,6 +21,10 @@ npm run aero-report
 npx playwright test   # 浏览器端到端(需系统 Chrome)
 ```
 
+## 气动与科学验证
+
+统一气动力求解器(`src/aero/solver.ts`,Phase 02):积分器、极曲线与遥测共用同一纯函数入口;公式审计见 [docs/AERO-FORMULAS.md](docs/AERO-FORMULAS.md),坐标/单位约定见 [docs/COORDINATES.md](docs/COORDINATES.md),校准与独立验证数据分层见 [docs/AERO-VALIDATION.md](docs/AERO-VALIDATION.md)。提供无经验门控的物理基准模型(`model:'baseline'`,不改变 gameplay 版本),结构化环境实验输入(垂直风/密度),实时遥测写入实际积分状态。`npm run convergence` 输出 120/240/480/960 Hz 收敛与计算成本报告。
+
 ## 工程治理
 
 缺陷台账、基线数据与架构审查记录见 [docs/GOVERNANCE.md](docs/GOVERNANCE.md)(2026-11-26 治理阶段:DOM 注入修复、投掷配置快照、比赛校验与量化排名、状态机集中化、9 路浏览器端到端)。

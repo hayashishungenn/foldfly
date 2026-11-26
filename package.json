@@ -8,7 +8,8 @@
     "test": "vitest run",
     "calibrate": "vite-node scripts/calibrate.ts",
     "aero-report": "vite-node scripts/aero-report.ts",
-    "e2e": "playwright test"
+    "e2e": "playwright test",
+    "convergence": "vite-node scripts/convergence-report.ts"
   },
   "devDependencies": {
     "@playwright/test": "^1.65.1",

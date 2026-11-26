@@ -104,3 +104,15 @@ calibrate.ts → extract+simulate(校验报告);scripts/* → 同上 + sweep/con
 ```
 
 **审计结论(驱动 Phase 02 后续任务)**:同一门控家族在 integrator 与 polar 各实现一份(违反 2.5);遥测靠位置差分反推(违反 2.10);大气环境与机体状态未结构化(2.4/2.12);eOswald≈8 与展示型 Polhamus/地面效应均需明确标注;无门控基准模型尚未建立(2.7)。
+
+## 8. Phase 02 模型审查结论(2.6–2.9)
+
+**2.6 基础升阻力模型**:`coefficients()` 使用有限翼斜率 2πAR/(AR+2)、JFM 平板失速参数(14°/6°、0.95、1.9)、经典诱导阻力与零升阻力经验值。负/正迎角严格反对称、阻力对称(测试覆盖 5°–175°);低迎角与失速过渡连续;零空速时 solver 气动力为 0;极低速/极高速度无非物理发散(见 solver-invariants.test.ts)。**注意**:`polar.ts` 的 Polhamus Kp 斜率 2πAR/(AR+2√(1+(AR/2)²)) 与基础模型斜率来源不同,已在 solver 中分别用于配平与俯仰阻尼,不混用。
+
+**2.7 经验门控**:cambered/enduranceMode/penetratorMode/distanceGliderMode/slowEndurance/clCamber/eOswald/配平补偿/爬升阻力修正均为【P】经验代理,不是可测物理量;其中 eOswald 最高约 8.2 明确超出经典 e≤1 适用范围,是 2D 平面复现室内滞空的工程等效。已新增 `model:'baseline'` 无门控基准变体(纯函数 `prepareSolver`/`solveAero`,不参与 gameplay、不改变已发布成绩版本),供后续用独立实验数据逐步替换代理项。**未**仅把门控搬到另一文件后宣称完成物理升级。
+
+**2.8 阻力分项**:诱导阻力 CL²/(π·AR·e) 与零升阻力、分离流阻力分别记录于 `AeroSolution.dragBreakdown`;机身/折层附加阻力以 finenessPenalty 并入零升项(不重复累加);形状阻力与翼身干扰阻力暂无可靠折纸机数据,**未实现并已明示**。地面效应/VDM 仅展示,未加入合力。阻力方向严格与相对空速相反(solver-invariants 测试)。
+
+**2.9 配平与俯仰稳定**:力矩 = qS(−normal·lever − slope·ω_pitch·dampingArm/V + 实验高度力矩),压力中心在配平后迎角处按四分之一弦与翼心插值;静稳定余量 SM=(AC−CG)/c 决定恢复/发散行为。基准模型不添加任何强制姿态恢复力——不稳定构型 continuing 发散(分离流大迎角恢复来自物理极曲线,不是人为回正)。平衡迎角/配平速度/短周期与 Phugoid 周期见 polar.ts(展示型解析近似)。
+
+**2.10–2.12 实施**:`Flight.samples` 写入实际积分状态与统一求解结果(vx/vy/vz/alpha/beta/q/cl/cd/加速度),遥测优先读取这些字段,旧存档回退差分;极曲线由 solver 固定水平参考条件生成并标注;结构化环境(风/垂直风/密度/黏度/种子)经 `SimulationOptions.environment` 注入并参与实际求解,展示型指标明确不参与轨迹。

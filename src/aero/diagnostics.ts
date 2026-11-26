@@ -112,20 +112,22 @@ export function telemetryAt(
   const y = s0.y + (s1.y - s0.y) * f;
   const pitch = s0.pitch + (s1.pitch - s0.pitch) * f;
   const rad = (launch.angle * Math.PI) / 180;
-  const {vx, vy} =
-    targetT <= 1e-6
-      ? {vx: launch.speed * Math.cos(rad), vy: launch.speed * Math.sin(rad)}
-      : velocityAtIndex(samples, idx, launch);
+  // 2.10:优先使用采样时写入的真实积分状态;旧存档/外部 Flight 回退到差分反推
+  const recorded = s0.vx !== undefined && s1.vx !== undefined && s0.vy !== undefined && s1.vy !== undefined;
+  const vx = recorded ? s0.vx! + (s1.vx! - s0.vx!) * f : targetT <= 1e-6 ? launch.speed * Math.cos(rad) : velocityAtIndex(samples, idx, launch).vx;
+  const vy = recorded ? s0.vy! + (s1.vy! - s0.vy!) * f : targetT <= 1e-6 ? launch.speed * Math.sin(rad) : velocityAtIndex(samples, idx, launch).vy;
 
   const ux = vx - launch.wind;
   const uy = vy;
-  const airSpeed = Math.hypot(ux, uy);
+  const airSpeed = recorded && s0.airSpeed !== undefined ? s0.airSpeed + ((s1.airSpeed ?? s0.airSpeed) - s0.airSpeed) * f : Math.hypot(ux, uy);
   const groundSpeed = Math.hypot(vx, vy);
   const gamma = airSpeed > 1e-4 ? Math.atan2(uy, ux) : pitch;
-  const alpha = Math.atan2(Math.sin(pitch - gamma), Math.cos(pitch - gamma));
+  const interpolatedAlpha = recorded && s0.alpha !== undefined ? s0.alpha + ((s1.alpha ?? s0.alpha) - s0.alpha) * f : null;
+  const alpha = interpolatedAlpha ?? Math.atan2(Math.sin(pitch - gamma), Math.cos(pitch - gamma));
 
-  const {cl, cd} = effectiveCoefficients(alpha, aero, airSpeed);
-  const q = 0.5 * 1.225 * airSpeed * airSpeed * aero.wingArea;
+  const cl = recorded && s0.cl !== undefined ? s0.cl + ((s1.cl ?? s0.cl) - s0.cl) * f : effectiveCoefficients(alpha, aero, airSpeed).cl;
+  const cd = recorded && s0.cd !== undefined ? s0.cd + ((s1.cd ?? s0.cd) - s0.cd) * f : effectiveCoefficients(alpha, aero, airSpeed).cd;
+  const q = recorded && s0.q !== undefined ? s0.q + ((s1.q ?? s0.q) - s0.q) * f : 0.5 * 1.225 * airSpeed * airSpeed * aero.wingArea;
   const liftSigned = cl * q;
   const drag = cd * q;
   const weight = aero.mass * 9.81;
