@@ -21,6 +21,10 @@ npm run aero-report
 npx playwright test   # 浏览器端到端(需系统 Chrome)
 ```
 
+## 折纸拓扑与三维几何
+
+`src/fold/topology.ts` 提供面片级拓扑追踪(稳定 ID、来源链、层叠索引、折痕记录,与引擎同剖分原语、面积守恒);`src/fold/geometry-out.ts` 输出统一 3D 面片/法向/面积/三角网格供渲染与气动消费;统一几何容差在 `src/fold/geometry-constants.ts`;折叠会话可版本化序列化。展翼新增显式翼根 `openRoot`(支持倾斜翼根)。能力边界与不支持项见 [docs/FOLD-TOPOLOGY.md](docs/FOLD-TOPOLOGY.md)。
+
 ## 气动与科学验证
 
 统一气动力求解器(`src/aero/solver.ts`,Phase 02):积分器、极曲线与遥测共用同一纯函数入口;公式审计见 [docs/AERO-FORMULAS.md](docs/AERO-FORMULAS.md),坐标/单位约定见 [docs/COORDINATES.md](docs/COORDINATES.md),校准与独立验证数据分层见 [docs/AERO-VALIDATION.md](docs/AERO-VALIDATION.md)。提供无经验门控的物理基准模型(`model:'baseline'`,不改变 gameplay 版本),结构化环境实验输入(垂直风/密度),实时遥测写入实际积分状态。`npm run convergence` 输出 120/240/480/960 Hz 收敛与计算成本报告。

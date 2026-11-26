@@ -1,3 +1,4 @@
+import {EPS_AREA, EPS_CLIP, EPS_INSIDE, EPS_VECTOR} from './geometry-constants';
 export type Point = {x:number;y:number};
 export type Polygon = Point[];
 /** Shift the integration origin to avoid cancellation for translated sheets. */
@@ -18,7 +19,7 @@ export function centroid(p:Polygon):Point {
   const a=p[i],b=p[(i+1)%p.length],ax=a.x-origin.x,ay=a.y-origin.y,bx=b.x-origin.x,by=b.y-origin.y;
   const cross=ax*by-bx*ay;sum+=cross;x+=(ax+bx)*cross;y+=(ay+by)*cross;
  }
- if(Math.abs(sum)<2e-12)return {x:0,y:0};
+ if(Math.abs(sum)<EPS_AREA*2)return {x:0,y:0};
  return {x:origin.x+x/(3*sum),y:origin.y+y/(3*sum)};
 }
 export function side(p:Point,a:Point,b:Point):number {return (b.x-a.x)*(p.y-a.y)-(b.y-a.y)*(p.x-a.x)}

@@ -25,6 +25,8 @@ export type FoldStep = FoldOperation & {
   unfold?: boolean;
   unfoldToStep?: number;
   openToStep?: number;
+  /** 3.10:展翼时使用的独立翼根折线(可与折痕本身不同);允许倾斜翼根。 */
+  openRoot?: FoldBoundary;
   operations?: FoldOperation[];
 };
 

@@ -1,3 +1,4 @@
+import {EPS_AREA, EPS_CLIP, EPS_VECTOR} from './geometry-constants';
 import {area,clip,reflect,signedArea,type Point,type Polygon} from './geometry';
 import {dart,type FoldStep,type FoldOperation,type FoldBoundary,type FoldPoint} from './planes/dart';
 import type {Point3} from './geometry3d';
@@ -14,7 +15,7 @@ export function line(step:FoldBoundary & {diagonal?:boolean},s:Sheet):[Point,Poi
    const la=Math.hypot(a.x-v.x,a.y-v.y),lb=Math.hypot(b.x-v.x,b.y-v.y);
    if(la<1e-12||lb<1e-12)throw new Error('角平分线的射线长度不能为零');
    const dx=(a.x-v.x)/la+(b.x-v.x)/lb,dy=(a.y-v.y)/la+(b.y-v.y)/lb;
-   if(Math.abs(dy)<1e-12)throw new Error('角平分线无法与目标水平线相交');
+   if(Math.abs(dy)<EPS_VECTOR)throw new Error('角平分线无法与目标水平线相交');
    const y=atY*s.height;
    return {x:v.x+dx*(y-v.y)/dy,y};
   }
@@ -46,7 +47,7 @@ export function splitFold(layers:Polygon[],groups:number[],s:Sheet,op:FoldOperat
  const valid=(p:Polygon)=>p.length>=3 && area(p)>1e-12;
  const lines=boundaries.map(boundary=>{
   const [a,b]=line(boundary,s);
-  if(Math.hypot(b.x-a.x,b.y-a.y)<1e-12)throw new Error('折痕两端不能重合');
+  if(Math.hypot(b.x-a.x,b.y-a.y)<EPS_VECTOR)throw new Error('折痕两端不能重合');
   return {a,b,sign:boundary.sign};
  });
  for(let index=0;index<layers.length;index++){
@@ -74,7 +75,7 @@ export function splitFold(layers:Polygon[],groups:number[],s:Sheet,op:FoldOperat
     let inside=fragment;
     for(let edge=0;edge<cover.length && valid(inside);edge++){
      const a=cover[edge],b=cover[(edge+1)%cover.length];
-     if(Math.hypot(b.x-a.x,b.y-a.y)<1e-12)continue;
+     if(Math.hypot(b.x-a.x,b.y-a.y)<EPS_VECTOR)continue;
      const outside=clip(inside,a,b,-orientation);
      if(valid(outside))exposed.push(outside);
      inside=clip(inside,a,b,orientation);
@@ -157,7 +158,8 @@ export function replay(s:Sheet,count:number,program:readonly FoldStep[]=dart):Fo
   }
  }
  const sourceLayers=projectedSource.layers,center=s.width/2;
- const [rootA,rootB]=line(opening!,s);
+ // 3.10:优先使用显式翼根折线;缺省沿用原折痕(保持既有折序逐位一致)
+ const [rootA,rootB]=opening!.openRoot ? line(opening!.openRoot,s) : line(opening!,s);
  if(Math.abs(rootA.y-rootB.y)<1e-12)throw new Error('展翼折痕必须有纵向长度');
  if(Math.abs(rootA.x-rootB.x)>1e-10){
   if(rootA.x>s.width+1e-10||rootB.x>s.width+1e-10)throw new Error('翼根必须位于纸张内');

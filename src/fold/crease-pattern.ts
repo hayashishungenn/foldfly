@@ -1,3 +1,4 @@
+import {EPS_AREA, EPS_CLIP, EPS_INSIDE, EPS_LINE, EPS_MATCH, EPS_VECTOR} from './geometry-constants';
 import {line, replay, type Sheet} from './engine';
 import {signedArea, side, type Point, type Polygon} from './geometry';
 import type {FoldStep} from './types';
@@ -45,7 +46,7 @@ export function clipLineToPolygon(a: Point, b: Point, polygon: Polygon): [Point,
   const dx = b.x - a.x;
   const dy = b.y - a.y;
   const lineLen = Math.hypot(dx, dy);
-  if (lineLen < 1e-12 || polygon.length < 3) return null;
+  if (lineLen < EPS_VECTOR || polygon.length < 3) return null;
 
   const orientation = signedArea(polygon) >= 0 ? 1 : -1;
   let minT = -1e6;
@@ -61,8 +62,8 @@ export function clipLineToPolygon(a: Point, b: Point, polygon: Polygon): [Point,
     const distA = (ex * (a.y - e0.y) - ey * (a.x - e0.x)) * orientation;
     const rate = (ex * dy - ey * dx) * orientation;
 
-    if (Math.abs(rate) < 1e-12) {
-      if (distA < -1e-9) return null;
+    if (Math.abs(rate) < EPS_VECTOR) {
+      if (distA < -EPS_CLIP) return null;
       continue;
     }
     const tHit = -distA / rate;
@@ -71,12 +72,12 @@ export function clipLineToPolygon(a: Point, b: Point, polygon: Polygon): [Point,
     } else {
       maxT = Math.min(maxT, tHit);
     }
-    if (maxT - minT < 1e-9) return null;
+    if (maxT - minT < EPS_CLIP) return null;
   }
 
   const start = {x: a.x + dx * minT, y: a.y + dy * minT};
   const end = {x: a.x + dx * maxT, y: a.y + dy * maxT};
-  if (Math.hypot(end.x - start.x, end.y - start.y) < 1e-6) return null;
+  if (Math.hypot(end.x - start.x, end.y - start.y) < EPS_LINE) return null;
   return [start, end];
 }
 
@@ -87,7 +88,7 @@ export function pointInPolygon(pt: Point, polygon: Polygon): boolean {
   for (let i = 0; i < polygon.length; i++) {
     const a = polygon[i];
     const b = polygon[(i + 1) % polygon.length];
-    if (side(pt, a, b) * orientation < -1e-7) return false;
+    if (side(pt, a, b) * orientation < -EPS_INSIDE) return false;
   }
   return true;
 }
@@ -149,7 +150,7 @@ export function extractCreasePattern(
       const mStart = {x: w - start.x, y: start.y};
       const mEnd = {x: w - end.x, y: end.y};
       const isCenterline =
-        Math.hypot(mStart.x - start.x, mStart.y - start.y) < 1e-4 &&
+        Math.hypot(mStart.x - start.x, mStart.y - start.y) < EPS_MATCH / 10 &&
         Math.hypot(mEnd.x - end.x, mEnd.y - end.y) < 1e-4;
 
       segments.push({
@@ -258,7 +259,7 @@ export function analyzeCreaseTopology(
 
   // Find pairwise interior intersections of crease segments
   const interiorVertices: Point[] = [];
-  const eps = 1e-4;
+  const eps = EPS_MATCH / 10;
   for (let i = 0; i < segments.length; i++) {
     for (let j = i + 1; j < segments.length; j++) {
       const a = segments[i];
@@ -268,19 +269,19 @@ export function analyzeCreaseTopology(
       const d2x = b.end.x - b.start.x;
       const d2y = b.end.y - b.start.y;
       const denom = d1x * d2y - d1y * d2x;
-      if (Math.abs(denom) < 1e-9) continue;
+      if (Math.abs(denom) < EPS_VECTOR) continue;
 
       const dx = b.start.x - a.start.x;
       const dy = b.start.y - a.start.y;
       const t = (dx * d2y - dy * d2x) / denom;
       const u = (dx * d1y - dy * d1x) / denom;
-      if (t < -1e-5 || t > 1 + 1e-5 || u < -1e-5 || u > 1 + 1e-5) continue;
+      if (t < -EPS_MATCH / 2 || t > 1 + EPS_MATCH / 2 || u < -EPS_MATCH / 2 || u > 1 + EPS_MATCH / 2) continue;
 
       const px = a.start.x + t * d1x;
       const py = a.start.y + t * d1y;
       if (px <= eps || px >= sheet.width - eps || py <= eps || py >= sheet.height - eps) continue;
 
-      if (!interiorVertices.some(v => Math.hypot(v.x - px, v.y - py) < 8e-4)) {
+      if (!interiorVertices.some(v => Math.hypot(v.x - px, v.y - py) < EPS_MATCH * 80)) {
         interiorVertices.push({x: px, y: py});
       }
     }
@@ -294,7 +295,7 @@ export function analyzeCreaseTopology(
     return segments.some(
       other =>
         other.kind === seg.kind &&
-        ((Math.hypot(other.start.x - ms.x, other.start.y - ms.y) < 1e-3 &&
+        ((Math.hypot(other.start.x - ms.x, other.start.y - ms.y) < EPS_MATCH / 10 &&
           Math.hypot(other.end.x - me.x, other.end.y - me.y) < 1e-3) ||
           (Math.hypot(other.start.x - me.x, other.start.y - me.y) < 1e-3 &&
             Math.hypot(other.end.x - ms.x, other.end.y - ms.y) < 1e-3)),
