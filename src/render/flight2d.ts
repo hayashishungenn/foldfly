@@ -147,12 +147,12 @@ export function renderFlightCanvas(
     c.restore();
   }
 
-  // Historical challenge target marker (--mark-red #D9482B)
-  c.font = "18px 'IBM Plex Mono', monospace";
+  // Historical challenge milestone (88.31 m Mach 5) & Current Distance WR (98.43 m, 2025-12-28)
+  c.font = "15px 'IBM Plex Mono', monospace";
   c.fillStyle = '#D9482B';
   if (challenge === 'distance') {
-    if (maxX >= 88) {
-      const x = mapX(88);
+    if (maxX >= 88.31 && minX <= 88.31) {
+      const x = mapX(88.31);
       c.strokeStyle = '#D9482B';
       c.lineWidth = 1.5;
       c.setLineDash([6, 6]);
@@ -161,12 +161,25 @@ export function renderFlightCanvas(
       c.lineTo(x, 520);
       c.stroke();
       c.setLineDash([]);
-      c.fillText('★ 88 m', Math.min(830, x + 8), 55);
-    } else {
-      c.fillText('历史目标 88 m →', 730, 55);
+      c.fillText('★ 88.3m 里程碑', Math.min(795, x + 6), 52);
+    }
+    if (maxX >= 98.43 && minX <= 98.43) {
+      const wx = mapX(98.43);
+      c.strokeStyle = '#C9A227';
+      c.fillStyle = '#C9A227';
+      c.lineWidth = 1.6;
+      c.setLineDash([4, 4]);
+      c.beginPath();
+      c.moveTo(wx, 58);
+      c.lineTo(wx, 520);
+      c.stroke();
+      c.setLineDash([]);
+      c.fillText('WR 98.43m', Math.min(845, wx + 6), 74);
+    } else if (maxX < 88.31) {
+      c.fillText('里程碑 88.3m / WR 98.4m →', 690, 52);
     }
   } else {
-    c.fillText('滞空目标 29.2 s', 680, 55);
+    c.fillText('里程碑 29.2s / WR 31.2s', 705, 52);
   }
 
   function path(f: Flight, limit: number, color: string, dashed: boolean) {

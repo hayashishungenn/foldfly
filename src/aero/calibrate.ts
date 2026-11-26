@@ -16,9 +16,9 @@ export function calibrationReport():CalibrationRow[] {
   {id:'dart',metric:'distance',target:15,settings:{angle:0,speed:20,wind:0},gsm:80,note:'水平投掷 20 m/s；任务书中等力度约 10–20 m 的中点'},
   {id:'suzanne',metric:'distance',target:69.14,settings:{angle:0,speed:28,wind:0},gsm:100,note:'A4 100 gsm 水平高速滑翔；几何驱动气动校准锚点'},
   {id:'suzanne',metric:'duration',target:9,settings:{angle:0,speed:28,wind:0},gsm:100,note:'设计者报告纪录飞行约 9 秒；与距离锚点同次投掷'},
-  {id:'mach5',metric:'distance',target:88,settings:{angle:40,speed:28,wind:0},gsm:100,note:'纪录用 A4 100 gsm、40° 投掷角；X-43A 风格工程复刻折序'},
-  {id:'skyking',metric:'duration',target:27.9,settings:{angle:20,speed:8,wind:0},gsm:80,note:'A4 80 gsm 轻柔抛投；大展弦比滞空校准锚点'},
-  {id:'zerofighter',metric:'duration',target:29.2,settings:{angle:20,speed:8,wind:0},gsm:80,note:'户田拓夫 29.2 s 纪录机型，暂无几何'},
+  {id:'mach5',metric:'distance',target:88,settings:{angle:40,speed:28,wind:0},gsm:100,note:'工程近似机型（原机未公开）；对标 2022 年 88.31 m 历史里程碑（现役 WR 98.43 m，2025-12-28）'},
+  {id:'skyking',metric:'duration',target:27.9,settings:{angle:20,speed:8,wind:0},gsm:80,note:'A4 80 gsm 轻柔抛投；2009 年 Sky King 27.9 s 锚点（区别于 2010 年 29.2 s 及现役 31.2 s）'},
+  {id:'zerofighter',metric:'duration',target:29.2,settings:{angle:20,speed:8,wind:0},gsm:80,note:'户田拓夫 2010 年 29.2 s 历史里程碑机型，暂无几何（现役 WR 31.2 s）'},
  ];
  return scenarios.map(s=>{
   if(!Object.hasOwn(planes,s.id))return {...s,result:null,empiricalResult:null};
