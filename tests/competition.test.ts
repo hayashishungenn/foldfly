@@ -58,7 +58,7 @@ describe('正式飞行比赛系统 (competition)', () => {
     for (const f of throws) {
       const turn = currentTurn(match)!;
       expect(turn).not.toBeNull();
-      const res = recordCompetitionThrow(match, {angle: 20, speed: 24, wind: turn.wind}, f);
+      const res = recordCompetitionThrow(match, {angle: 20, speed: 24, wind: turn.wind, crosswind: turn.crosswind}, f);
       match = res.match;
       expect(res.record.modelVersion).toBe(FLIGHT_MODEL_VERSION);
     }
@@ -92,10 +92,16 @@ describe('正式飞行比赛系统 (competition)', () => {
         {id: 'd', name: 'D', plane: 'dart'},
       ],
     });
-    match = recordCompetitionThrow(match, {angle: 20, speed: 8, wind: 0}, {distance: 40, duration: 20.5, height: 2.4, landed: true}).match;
-    match = recordCompetitionThrow(match, {angle: 20, speed: 8, wind: 0}, {distance: 41, duration: 20.5, height: 2.5, landed: true}).match;
-    match = recordCompetitionThrow(match, {angle: 20, speed: 15, wind: 0}, {distance: 14, duration: 2.4, height: 3.2, landed: true}).match;
-    match = recordCompetitionThrow(match, {angle: 20, speed: 15, wind: 0}, {distance: 10, duration: 60, height: 5.0, landed: false}).match;
+    const throws4 = [
+      {angle: 20, speed: 8, distance: 40, duration: 20.5, height: 2.4, landed: true},
+      {angle: 20, speed: 8, distance: 41, duration: 20.5, height: 2.5, landed: true},
+      {angle: 20, speed: 15, distance: 14, duration: 2.4, height: 3.2, landed: true},
+      {angle: 20, speed: 15, distance: 10, duration: 60, height: 5.0, landed: false},
+    ];
+    for (const t of throws4) {
+      const turn = currentTurn(match)!;
+      match = recordCompetitionThrow(match, {angle: t.angle, speed: t.speed, wind: turn.wind, crosswind: turn.crosswind}, {distance: t.distance, duration: t.duration, height: t.height, landed: t.landed}).match;
+    }
 
     const standings = computeStandings(match);
     expect(standings[0].rank).toBe(1);
@@ -192,5 +198,95 @@ describe('同场锁定纸张材质 (grade)', () => {
     expect(decodeCompetitionPb(legacyRaw, 'distance')?.grade).toBeUndefined();
     const invalidRaw = JSON.stringify({...pb, grade: 'titanium'});
     expect(decodeCompetitionPb(invalidRaw, 'distance')).toBeNull();
+  });
+});
+
+describe('比赛数据校验与排名规则 (governance 1.6)', () => {
+  const baseConfig = {
+    event: 'distance' as const,
+    paper: 'a4' as const,
+    gsm: 80 as const,
+    seed: 42,
+    players: [{id: 'p1', name: '甲', plane: 'dart' as const}],
+  };
+
+  it('拒绝重复选手 ID、未知机型/纸张/克重、越界种子与轮数', () => {
+    expect(() => createCompetitionMatch({...baseConfig, players: [{id: 'p1', name: '甲', plane: 'dart'}, {id: 'p1', name: '乙', plane: 'dart'}]})).toThrow('选手 ID 必须唯一');
+    expect(() => createCompetitionMatch({...baseConfig, players: [{id: 'p1', name: '甲', plane: 'nope' as never}]})).toThrow('未知的参赛机型');
+    expect(() => createCompetitionMatch({...baseConfig, paper: 'a3' as never})).toThrow('未知的纸张规格');
+    expect(() => createCompetitionMatch({...baseConfig, gsm: 90 as never})).toThrow('未知的纸张克重');
+    expect(() => createCompetitionMatch({...baseConfig, seed: -1})).toThrow('比赛种子');
+    expect(() => createCompetitionMatch({...baseConfig, seed: 1.5})).toThrow('比赛种子');
+    expect(() => createCompetitionMatch({...baseConfig, rounds: 0})).toThrow('比赛轮数');
+    expect(() => createCompetitionMatch({...baseConfig, rounds: 10})).toThrow('比赛轮数');
+  });
+
+  it('重复提交防线:回合指针与成绩记录失配的损坏状态被拒绝', () => {
+    // 不可变设计下,同一份赛前状态提交两次各自成功且互不覆盖(天然幂等);
+    // 防线针对的是"指针未推进但记录已存在"的损坏/反序列化状态:
+    let match = createCompetitionMatch({...baseConfig, seed: 1});
+    const turn = currentTurn(match)!;
+    match = recordCompetitionThrow(match, {angle: 20, speed: 15, wind: turn.wind, crosswind: turn.crosswind}, {distance: 12, duration: 2, height: 2, landed: true}).match;
+    const corrupted = {...match, currentRound: 1, currentPlayerIndex: 0, status: 'in-progress' as const};
+    expect(() =>
+      recordCompetitionThrow(corrupted, {angle: 20, speed: 15, wind: turn.wind, crosswind: turn.crosswind}, {distance: 12, duration: 2, height: 2, landed: true}),
+    ).toThrow('不能重复记录');
+    // 同一赛前状态重复提交产生同一结果(事件重放幂等)
+    const matchBefore = createCompetitionMatch({...baseConfig, seed: 1});
+    const turn2 = currentTurn(matchBefore)!;
+    const r1 = recordCompetitionThrow(matchBefore, {angle: 20, speed: 15, wind: turn2.wind, crosswind: turn2.crosswind}, {distance: 12, duration: 2, height: 2, landed: true});
+    const r2 = recordCompetitionThrow(createCompetitionMatch({...baseConfig, seed: 1}), {angle: 20, speed: 15, wind: turn2.wind, crosswind: turn2.crosswind}, {distance: 12, duration: 2, height: 2, landed: true});
+    expect(r1.record.score).toBe(r2.record.score);
+  });
+
+  it('风况不一致与非有限数值被拒绝,而非静默覆盖', () => {
+    let match = createCompetitionMatch({...baseConfig, seed: 2});
+    const turn = currentTurn(match)!;
+    expect(() =>
+      recordCompetitionThrow(match, {angle: 20, speed: 15, wind: turn.wind + 1, crosswind: turn.crosswind}, {distance: 12, duration: 2, height: 2, landed: true}),
+    ).toThrow('风场不一致');
+    expect(() =>
+      recordCompetitionThrow(match, {angle: 20, speed: 15, wind: turn.wind, crosswind: turn.crosswind}, {distance: NaN, duration: 2, height: 2, landed: true}),
+    ).toThrow('飞行结果');
+    expect(() =>
+      recordCompetitionThrow(match, {angle: 20, speed: 15, wind: turn.wind, crosswind: turn.crosswind}, {distance: 12, duration: Infinity, height: 2, landed: true}),
+    ).toThrow('飞行结果');
+    expect(() =>
+      recordCompetitionThrow(match, {angle: NaN, speed: 15, wind: turn.wind, crosswind: turn.crosswind}, {distance: 12, duration: 2, height: 2, landed: true}),
+    ).toThrow('投掷参数');
+  });
+
+  it('量化比较具有传递性与确定性:同格并列 1,1,3,异格必分高下,输入顺序无关', () => {
+    expect(Math.round(10.0001 * 1000) / 1000).toBe(10);
+    expect(Math.round(10.0004 * 1000) / 1000).toBe(10);
+    expect(Math.round(10.0006 * 1000) / 1000).toBe(10.001);
+    const mk = (scores: number[]) => {
+      let m = createCompetitionMatch({...baseConfig, seed: 3, rounds: 1, players: scores.map((_, i) => ({id: `p${i}`, name: `P${i}`, plane: 'dart' as const}))});
+      for (let i = 0; i < scores.length; i++) {
+        const turn = currentTurn(m)!;
+        m = recordCompetitionThrow(m, {angle: 20, speed: 15, wind: turn.wind, crosswind: turn.crosswind}, {distance: scores[i], duration: 1, height: 1, landed: true}).match;
+      }
+      return computeStandings(m);
+    };
+    // 10.0001 与 10.0004 同格并列第 1,12 独占第 3;两种输入顺序结果一致
+    const a = mk([10.0001, 10.0004, 12]);
+    const b = mk([12, 10.0004, 10.0001]);
+    // p2(12 m)独占第 1;两个 10 m 同格并列第 2(竞赛排名 1,2,2)
+    expect(a.map(s => `${s.player.id}:${s.rank}`)).toEqual(['p2:1', 'p0:2', 'p1:2']);
+    expect(b.map(s => `${s.player.id}:${s.rank}`)).toEqual(['p0:1', 'p1:2', 'p2:2']);
+    // 同一输入两次计算完全一致
+    expect(mk([10.0001, 10.0004, 12]).map(s => s.player.id)).toEqual(a.map(s => s.player.id));
+  });
+
+  it('每条成绩具有唯一投掷标识', () => {
+    let match = createCompetitionMatch({...baseConfig, seed: 4, players: [{id: 'a', name: 'A', plane: 'dart'}, {id: 'b', name: 'B', plane: 'dart'}]});
+    const ids: string[] = [];
+    for (let i = 0; i < 4; i++) {
+      const turn = currentTurn(match)!;
+      const res = recordCompetitionThrow(match, {angle: 20, speed: 15, wind: turn.wind, crosswind: turn.crosswind}, {distance: 12, duration: 2, height: 2, landed: true});
+      match = res.match;
+      ids.push(res.record.throwId);
+    }
+    expect(new Set(ids).size).toBe(4);
   });
 });

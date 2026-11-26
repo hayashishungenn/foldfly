@@ -65,7 +65,7 @@ describe('精准着陆赛(Phase 07 纯逻辑)', () => {
     const throwAt = (downrange: number) => {
       const turn = currentTurn(match)!;
       const flight = {distance: downrange, duration: 2, height: 2, landed: true, drift: 0};
-      match = recordCompetitionThrow(match, {angle: 20, speed: 15, wind: turn.wind}, flight).match;
+      match = recordCompetitionThrow(match, {angle: 20, speed: 15, wind: turn.wind, crosswind: turn.crosswind}, flight).match;
     };
     throwAt(target + 0.5); // near:0.5
     throwAt(target + 2.0); // far:2.0
