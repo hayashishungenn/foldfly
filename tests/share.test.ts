@@ -65,3 +65,11 @@ it('只分享已落地且播放完成的新成绩，不复用旧成绩',()=>{
  expect(resultForShare({...flight,landed:false},true,old)).toBeUndefined();
  expect(resultForShare(flight,true,old)).toEqual({distance:12,duration:3,height:2});
 });
+
+it('材质字段随链接保存并往返复现,旧链接缺省材质仍可读取',()=>{
+ const raw=(value:unknown)=>'#flight='+encodeURIComponent(JSON.stringify(value));
+ expect(decodeFlight(raw(f))?.grade).toBeUndefined();
+ const withGrade=encodeFlight({...f,grade:'news'});
+ expect(decodeFlight(withGrade)?.grade).toBe('news');
+ for(const grade of ['unknown','copy ',80,null])expect(decodeFlight(raw({...f,grade}))).toBeNull();
+});

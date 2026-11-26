@@ -136,3 +136,56 @@ describe('正式飞行比赛系统 (competition)', () => {
     expect(decodeCompetitionPb(wrongVersion, 'distance')).toBeNull();
   });
 });
+
+describe('同场锁定纸张材质 (grade)', () => {
+  it('比赛配置接受材质并在匹配对象上保持,非法材质抛错', () => {
+    const match = createCompetitionMatch({
+      event: 'distance',
+      paper: 'a4',
+      gsm: 100,
+      grade: 'laser',
+      seed: 5,
+      players: [{id: 'p1', name: '单人', plane: 'mach5'}],
+    });
+    expect(match.grade).toBe('laser');
+    expect(() =>
+      createCompetitionMatch({
+        event: 'distance',
+        paper: 'a4',
+        gsm: 100,
+        grade: 'steel' as never,
+        seed: 5,
+        players: [{id: 'p1', name: '单人', plane: 'mach5'}],
+      }),
+    ).toThrow();
+    // 缺省材质(旧调用方式)不写字段,行为兼容
+    const legacy = createCompetitionMatch({
+      event: 'duration',
+      paper: 'a4',
+      gsm: 80,
+      seed: 5,
+      players: [{id: 'p1', name: '单人', plane: 'skyking'}],
+    });
+    expect(legacy.grade).toBeUndefined();
+  });
+
+  it('个人最佳成绩保存材质,旧存档缺省材质仍可读取,非法材质拒绝', () => {
+    const pb = {
+      event: 'distance' as const,
+      score: 88.08,
+      playerName: '选手 1',
+      plane: 'mach5' as const,
+      paper: 'a4' as const,
+      gsm: 100 as const,
+      grade: 'coated' as const,
+      seed: 123,
+      modelVersion: FLIGHT_MODEL_VERSION,
+      recordedAt: '2026-11-26T12:00:00Z',
+    };
+    expect(decodeCompetitionPb(encodeCompetitionPb(pb), 'distance')?.grade).toBe('coated');
+    const legacyRaw = JSON.stringify({...pb, grade: undefined});
+    expect(decodeCompetitionPb(legacyRaw, 'distance')?.grade).toBeUndefined();
+    const invalidRaw = JSON.stringify({...pb, grade: 'titanium'});
+    expect(decodeCompetitionPb(invalidRaw, 'distance')).toBeNull();
+  });
+});

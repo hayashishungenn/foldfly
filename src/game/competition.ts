@@ -1,6 +1,7 @@
 import {FLIGHT_MODEL_VERSION, type Flight, type Throw} from '../aero/integrator';
 import type {PlaneId} from '../fold/planes';
 import type {Paper, weights} from '../paper/papers';
+import {isPaperGradeId, type PaperGradeId} from '../paper/material';
 
 export type CompetitionEvent = 'distance' | 'duration';
 export type CompetitionStatus = 'setup' | 'in-progress' | 'finished' | 'aborted';
@@ -41,6 +42,8 @@ export type CompetitionMatch = {
   event: CompetitionEvent;
   paper: Paper['id'];
   gsm: (typeof weights)[number];
+  /** 同场锁定的纸张材质;缺省为普通复印纸(旧存档兼容)。 */
+  grade?: PaperGradeId;
   seed: number;
   rounds: number;
   roundWinds: number[];
@@ -60,6 +63,7 @@ export type CompetitionPersonalBest = {
   plane: PlaneId;
   paper: Paper['id'];
   gsm: (typeof weights)[number];
+  grade?: PaperGradeId;
   seed: number;
   modelVersion: number;
   recordedAt: string;
@@ -92,6 +96,7 @@ export function createCompetitionMatch(config: {
   event: CompetitionEvent;
   paper: Paper['id'];
   gsm: (typeof weights)[number];
+  grade?: PaperGradeId;
   seed: number;
   players: CompetitionPlayer[];
   rounds?: number;
@@ -99,6 +104,9 @@ export function createCompetitionMatch(config: {
   const rounds = config.rounds ?? 3;
   if (config.players.length < 1 || config.players.length > 4) {
     throw new Error('比赛人数必须在 1 到 4 人之间');
+  }
+  if (config.grade !== undefined && !isPaperGradeId(config.grade)) {
+    throw new Error(`未知的纸张材质:${String(config.grade)}`);
   }
   const players = config.players.map((p, idx) => ({
     id: p.id || `p${idx + 1}`,
@@ -110,6 +118,7 @@ export function createCompetitionMatch(config: {
     event: config.event,
     paper: config.paper,
     gsm: config.gsm,
+    ...(config.grade !== undefined ? {grade: config.grade} : {}),
     seed: config.seed >>> 0,
     rounds,
     roundWinds: generateRoundWinds(config.seed, rounds),
@@ -300,6 +309,7 @@ export function decodeCompetitionPb(raw: string | null, event: CompetitionEvent)
     ) {
       return null;
     }
+    if (parsed.grade !== undefined && !isPaperGradeId(parsed.grade)) return null;
     return parsed as CompetitionPersonalBest;
   } catch {
     return null;

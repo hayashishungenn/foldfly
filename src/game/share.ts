@@ -1,11 +1,12 @@
 import {planes,type PlaneId} from '../fold/planes';
 import {papers,weights,type Paper} from '../paper/papers';
+import {isPaperGradeId,type PaperGradeId} from '../paper/material';
 import type {FoldStep} from '../fold/planes/dart';
 import {FLIGHT_MODEL_VERSION} from '../aero/integrator';
 import type {Flight} from '../aero/integrator';
 import {FOLD_ENGINE_VERSION} from '../fold/engine';
 export type SharedResult={distance:number;duration:number;height:number};
-export type SharedFlight = {version:1;plane:PlaneId;paper:Paper['id'];gsm:typeof weights[number];angle:number;speed:number;wind:number;step:number;foldSignature?:string;foldEngineVersion?:number;modelVersion?:number;challenge?:'distance'|'duration';result?:SharedResult};
+export type SharedFlight = {version:1;plane:PlaneId;paper:Paper['id'];gsm:typeof weights[number];angle:number;speed:number;wind:number;step:number;grade?:PaperGradeId;foldSignature?:string;foldEngineVersion?:number;modelVersion?:number;challenge?:'distance'|'duration';result?:SharedResult};
 /** FNV-1a over the program; detects edits even when the step count is unchanged. */
 function hashProgram(value:unknown):string {
  let hash=2166136261;
@@ -24,6 +25,8 @@ export function decodeFlight(hash:string):SharedFlight|null {
   if(!hash.startsWith('#flight='))return null;
   const x=JSON.parse(decodeURIComponent(hash.slice(8)));
   if(x.version!==1||!Object.hasOwn(planes,x.plane)||!papers.some(p=>p.id===x.paper)||!weights.some(w=>w===x.gsm)||x.step!==planes[x.plane as PlaneId].steps.length)return null;
+  // 材质为可选字段:旧链接缺省,非法值拒绝而非静默替换
+  if(x.grade!==undefined&&!isPaperGradeId(x.grade))return null;
   if(x.foldSignature!==undefined && x.foldSignature!==foldSignature(x.plane as PlaneId) && x.foldSignature!==hashProgram(planes[x.plane as PlaneId].steps))return null;
   if(x.modelVersion!==undefined && (!Number.isSafeInteger(x.modelVersion)||x.modelVersion<1))return null;
   if(x.foldEngineVersion!==undefined && (!Number.isSafeInteger(x.foldEngineVersion)||x.foldEngineVersion<1))return null;

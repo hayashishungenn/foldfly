@@ -80,3 +80,20 @@
 ## 四、交付记录格式
 
 每阶段完成后在本文档末尾「交付记录」追加:实际完成功能、关键文件、修复问题及根因、实际执行的测试、通过/失败情况、性能变化、commit hash、未完成事项、已知限制、下一阶段依赖条件。
+
+---
+
+## 交付记录
+
+### Phase 01 — 纸张材料模型(2026-11-26 完成)
+
+- **实际完成**:纯逻辑材料库 `src/paper/material.ts`(5 种材质 × 克重 → 厚度/紧度/MD/CD 挺度/各向异性/最小折痕半径/折痕利落度,全部经验公式并标注非实测);材质接入分享链接(可选 `grade` 字段,旧链接缺省兼容、非法值拒绝)、正式比赛(同场锁定材质 + PB 存档可选字段);UI 材质选择器、材料参数展示、比赛横幅与结算展示、飞行页物理面板材质行;校准与气动报告打印材料对照表。
+- **关键文件**:`src/paper/material.ts`(新增)、`src/game/share.ts`、`src/game/competition.ts`、`src/main.ts`、`scripts/calibrate.ts`、`scripts/aero-report.ts`、`tests/material.test.ts`(新增)、`tests/share.test.ts`、`tests/competition.test.ts`、`README.md`。
+- **修复问题及根因**:paper 页材质区块多写了一个闭合 `</div>`(HTML 结构笔误),已修复;材质利落度排序断言最初按数组下标比较而非按材质 id,已改为显式 id 比较。
+- **实际执行的测试**:`npm test` 全量(32 文件 276 用例,新增 15)、`npm run build`(tsc + vite)、`npm run calibrate`。
+- **通过/失败**:全部通过。校准锚点与基线逐位一致(dart 11.68 m / suzanne 68.33 m·7.94 s / mach5 88.08 m / skyking 29.36 s)——确认飞行物理未被触碰。
+- **性能变化**:构建产物 162.41 kB → 166.38 kB(+3.97 kB,材质库与 UI);测试 5.16 s → 7.8 s(用例数增加)。
+- **Git commit**:路线图 `7db174e`;材料库 `dbc7bee`;材质接线与本记录见后续 commit。
+- **未完成事项**:材质对飞行物理的耦合(计划移交 Phase 02);材质不参与正式赛历史 PB 的显示(仅存档)。
+- **已知限制**:材料参数为经验区间中值,无本作实测校准;紧度/挺度排序合理但绝对值未对齐任何具体商品纸;折痕利落度是代理指标,其气动含义在 Phase 02 定义。
+- **下一阶段依赖条件**:Phase 02 需要 `creaseCrispness` 与 `minFoldRadius` 作为归一化输入,`grade` 状态已就位。

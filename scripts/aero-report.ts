@@ -1,6 +1,7 @@
 import {replay} from '../src/fold/engine';
 import {planes} from '../src/fold/planes';
 import {papers} from '../src/paper/papers';
+import {materialProfile} from '../src/paper/material';
 import {extract, aeroMetrics} from '../src/aero/extract';
 import {simulate} from '../src/aero/integrator';
 import {computeAeroPolar, analyzeTrajectoryPhases, sweepLaunchAngles} from '../src/aero/polar';
@@ -28,6 +29,10 @@ for (const cfg of configs) {
   const sweep = sweepLaunchAngles(aero, cfg.speed, 0);
 
   console.log(`\n=== ${p.name} (${cfg.id} · A4 ${cfg.gsm} gsm · 投掷 ${cfg.angle}° @ ${cfg.speed} m/s) ===`);
+  const mat = materialProfile('copy', cfg.gsm);
+  console.log(
+    `材料: ${mat.grade.name} | 厚度=${(mat.thickness * 1e6).toFixed(0)}µm | 挺度MD=${(mat.bendingStiffnessMD * 1e3).toFixed(3)}mN·m | CD=${(mat.bendingStiffnessCD * 1e3).toFixed(3)}mN·m | 折痕利落度=${(mat.creaseCrispness * 100).toFixed(0)}%（经验估算，未耦合物理）`,
+  );
   console.log(
     `几何: 质量=${(aero.mass * 1000).toFixed(2)}g | 翼展=${(aero.span * 100).toFixed(1)}cm | 弦长=${(aero.chord * 100).toFixed(1)}cm | 翼面积=${(aero.wingArea * 1e4).toFixed(1)}cm² | AR=${aero.aspectRatio.toFixed(2)} | 饱满度=${metrics.fullness.toFixed(3)} | SM=${(metrics.staticMargin * 100).toFixed(1)}% | 龙骨侧面积=${(aero.bodySideArea * 1e4).toFixed(1)}cm²`,
   );

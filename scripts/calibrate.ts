@@ -2,6 +2,7 @@ import {calibrationReport} from '../src/aero/calibrate';
 import {planes} from '../src/fold/planes';
 import {replay} from '../src/fold/engine';
 import {papers} from '../src/paper/papers';
+import {grades, materialProfile} from '../src/paper/material';
 import {extract} from '../src/aero/extract';
 import {simulate} from '../src/aero/integrator';
 console.log('FoldFly 校准对照（固定示例投掷，非世界纪录投掷复现）');
@@ -28,6 +29,13 @@ for(const paper of papers){
  for(const gsm of [80,100]){
   const properties=extract(state,gsm),flight=simulate(properties,{angle:0,speed:20,wind:0});
   console.log(`${paper.name.padEnd(10)} ${gsm} gsm 质量 ${(properties.mass*1000).toFixed(2)} g 翼载 ${(properties.mass/properties.wingArea).toFixed(3)} kg/m² 距离 ${flight.distance.toFixed(2)} m 滞空 ${flight.duration.toFixed(2)} s${flight.landed?'':'（未落地）'}`);
+ }
+}
+console.log('\n材料参数对照（经验参数库估算，非实测；Phase 01 未耦合进飞行物理）');
+for(const grade of grades){
+ for(const gsm of [80]){
+  const p=materialProfile(grade.id,gsm);
+  console.log(`${grade.name.padEnd(6)} ${gsm} gsm 厚度 ${(p.thickness*1e6).toFixed(0)} µm 紧度 ${p.bulkDensity.toFixed(0)} kg/m³ 挺度 MD ${(p.bendingStiffnessMD*1e3).toFixed(3)} / CD ${(p.bendingStiffnessCD*1e3).toFixed(3)} mN·m 各向异性 ${p.anisotropy.toFixed(2)} 折痕利落度 ${(p.creaseCrispness*100).toFixed(0)}%`);
  }
 }
 if(process.argv.includes('--sweep')){
