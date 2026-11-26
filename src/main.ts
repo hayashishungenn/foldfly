@@ -5,6 +5,7 @@ import {challengeResult, type Challenge} from './game/challenge';
 import {bestFlight, decodeGhost, encodeGhost, ghostStorageKey} from './game/ghost';
 import {mapDragToThrow, type CanvasPoint, type DragThrowResult} from './game/throw-control';
 import {accuracyMiss, accuracyTargetFromSeed} from './game/accuracy';
+import {achievements, collectAchievementContext, evaluateAchievements} from './game/achievements';
 import {
   careerChallenges,
   careerChallengeById,
@@ -274,6 +275,28 @@ function shell(content: string) {
   };
 }
 
+/** 纪录墙:自由挑战纪录 + 正式赛 PB + 生涯进度 + 成就(数据全部来自本地存档聚合)。 */
+function renderRecordsWall(): string {
+  const ctx = collectAchievementContext();
+  const unlocked = evaluateAchievements(ctx);
+  const planeRows = Object.values(planes)
+    .map(p => {
+      const g = ctx.ghosts[p.id];
+      return `<tr><td>${p.name}</td><td class="mono">${g?.distance ? g.distance.toFixed(1) + ' m' : '—'}</td><td class="mono">${g?.duration ? g.duration.toFixed(1) + ' s' : '—'}</td></tr>`;
+    })
+    .join('');
+  const pbRow = (event: 'distance' | 'duration' | 'accuracy', label: string) => {
+    const pb = ctx.competitionPbs[event];
+    const unit = event === 'duration' ? ' s' : ' m';
+    return `<tr><td>${label}</td><td class="mono">${pb ? pb.score.toFixed(2) + unit : '—'}</td><td class="mono">${pb?.playerName ?? '—'}</td></tr>`;
+  };
+  const badges = achievements
+    .map(a => `<div class="achievement ${unlocked[a.id] ? 'unlocked' : ''}"><strong>${a.title}</strong><small>${a.description}</small></div>`)
+    .join('');
+  const progress = ctx.career ? careerProgress(ctx.career) : {done: 0, total: careerChallenges.length};
+  return `<details class="records-wall"><summary>🏆 纪录墙与成就 <span class="mono">${unlocked[achievements[0].id] !== undefined ? Object.values(unlocked).filter(Boolean).length : 0}/${achievements.length} 成就</span></summary><div class="wall-grid"><div><h4>自由挑战纪录</h4><table class="detail-table"><thead><tr><th>机型</th><th>距离</th><th>滞空</th></tr></thead><tbody>${planeRows}</tbody></table><small class="mono">来自本机自由挑战幽灵存档</small></div><div><h4>正式赛个人最佳</h4><table class="detail-table"><thead><tr><th>项目</th><th>成绩</th><th>选手</th></tr></thead><tbody>${pbRow('distance', '距离赛')}${pbRow('duration', '滞空赛')}${pbRow('accuracy', '精准赛')}</tbody></table><small class="mono">生涯进度 ${progress.done}/${progress.total} 关</small></div><div><h4>成就</h4><div class="achievement-grid">${badges}</div></div></div></details>`;
+}
+
 /** 单机型本机个人最佳(距离/滞空,来自本地幽灵存档)。 */
 function planeBest(planeId: PlaneId): {distance: number | null; duration: number | null} {
   const out: {distance: number | null; duration: number | null} = {distance: null, duration: null};
@@ -459,7 +482,7 @@ function render() {
       })
       .join('');
     shell(
-      `<section><div class="section-head"><div><p class="eyebrow">单人生涯</p><h2>从童年回忆到纪录殿堂</h2><p>按顺序挑战 ${careerChallenges.length} 个关卡;每关锁定纸张与风况,精准赛开放角度与力度供你调整。${progress.done > 0 ? `已完成 ${progress.done}/${progress.total}。` : ''}</p></div><div class="flight-head-tools"><button id="career-back">← 返回选纸</button>${progress.done > 0 ? '<button id="career-reset">重置生涯</button>' : ''}</div></div>${careerNeedsReset ? '<p role="status">检测到不兼容的旧版生涯存档,已完成进度不可读;请重置后重新开始。</p>' : ''}<div class="career-grid">${cards}</div></section>`,
+      `<section><div class="section-head"><div><p class="eyebrow">单人生涯</p><h2>从童年回忆到纪录殿堂</h2><p>按顺序挑战 ${careerChallenges.length} 个关卡;每关锁定纸张与风况,精准赛开放角度与力度供你调整。${progress.done > 0 ? `已完成 ${progress.done}/${progress.total}。` : ''}</p></div><div class="flight-head-tools"><button id="career-back">← 返回选纸</button>${progress.done > 0 ? '<button id="career-reset">重置生涯</button>' : ''}</div></div>${careerNeedsReset ? '<p role="status">检测到不兼容的旧版生涯存档,已完成进度不可读;请重置后重新开始。</p>' : ''}<div class="career-grid">${cards}</div>${renderRecordsWall()}</section>`,
     );
     document.querySelector<HTMLButtonElement>('#career-back')!.onclick = () => {
       stage = 'paper';

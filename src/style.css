@@ -64,6 +64,17 @@ button:disabled{opacity:.45;cursor:default}
 .career-meta,.career-best{color:var(--pencil);font-size:12px}
 .badge.unlocked{color:var(--mark-red)}
 @media (max-width:640px){.career-grid{grid-template-columns:1fr}}
+.records-wall{margin-top:18px;border:1.5px solid var(--gold);border-radius:7px;padding:12px 16px;background:rgba(201,162,39,.06)}
+.records-wall summary{cursor:pointer;color:var(--gold);font-size:15px}
+.wall-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;margin-top:12px}
+.wall-grid h4{font-weight:400;color:var(--ink);margin:0 0 6px}
+.achievement-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.achievement{border:1px dashed var(--pencil);border-radius:6px;padding:8px 10px;opacity:.5}
+.achievement strong{font-weight:400;font-size:13px;display:block}
+.achievement small{color:var(--pencil);font-size:11px}
+.achievement.unlocked{opacity:1;border-color:var(--gold);border-style:solid;background:rgba(201,162,39,.1)}
+@media (max-width:900px){.wall-grid{grid-template-columns:1fr}}
+@media (max-width:640px){.career-grid{grid-template-columns:1fr}}
 .plane-block{display:flex;flex-direction:column;gap:0}
 .plane-block .plane-choice{flex:1}
 .plane-detail{border:1px dashed var(--grid-line);border-top:none;border-radius:0 0 7px 7px;padding:10px 16px;background:rgba(201,220,235,.14);font-size:13px}
