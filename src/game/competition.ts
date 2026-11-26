@@ -2,8 +2,9 @@ import {FLIGHT_MODEL_VERSION, type Flight, type Throw} from '../aero/integrator'
 import type {PlaneId} from '../fold/planes';
 import type {Paper, weights} from '../paper/papers';
 import {isPaperGradeId, type PaperGradeId} from '../paper/material';
+import {accuracyMiss, accuracyTargetFromSeed} from './accuracy';
 
-export type CompetitionEvent = 'distance' | 'duration';
+export type CompetitionEvent = 'distance' | 'duration' | 'accuracy';
 export type CompetitionStatus = 'setup' | 'in-progress' | 'finished' | 'aborted';
 
 export type CompetitionPlayer = {
@@ -44,6 +45,8 @@ export type CompetitionMatch = {
   gsm: (typeof weights)[number];
   /** 同场锁定的纸张材质;缺省为普通复印纸(旧存档兼容)。 */
   grade?: PaperGradeId;
+  /** 精准赛靶线距离(m);非精准赛为 undefined。由种子确定性生成,同场同靶。 */
+  accuracyTarget?: number;
   seed: number;
   rounds: number;
   roundWinds: RoundWind[];
@@ -127,6 +130,7 @@ export function createCompetitionMatch(config: {
     paper: config.paper,
     gsm: config.gsm,
     ...(config.grade !== undefined ? {grade: config.grade} : {}),
+    ...(config.event === 'accuracy' ? {accuracyTarget: accuracyTargetFromSeed(config.seed)} : {}),
     seed: config.seed >>> 0,
     rounds,
     roundWinds: generateRoundWinds(config.seed, rounds),
@@ -164,7 +168,8 @@ export function currentTurn(match: CompetitionMatch): {
 /** Evaluate whether a simulated flight counts as a valid official throw. */
 export function evaluateThrow(
   event: CompetitionEvent,
-  flight: Pick<Flight, 'distance' | 'duration' | 'height' | 'landed'>,
+  flight: Pick<Flight, 'distance' | 'duration' | 'height' | 'landed' | 'drift'>,
+  accuracyTarget?: number,
 ): {valid: boolean; score: number | null; invalidReason?: string} {
   if (!flight.landed) {
     return {valid: false, score: null, invalidReason: '超过模拟时限未落地（无效）'};
@@ -175,10 +180,22 @@ export function evaluateThrow(
     }
     return {valid: true, score: flight.distance};
   }
+  if (event === 'accuracy') {
+    if (!Number.isFinite(accuracyTarget)) {
+      throw new Error('精准赛缺少靶线距离');
+    }
+    const miss = accuracyMiss(flight.distance, flight.drift, accuracyTarget!);
+    return {valid: true, score: miss};
+  }
   if (!Number.isFinite(flight.duration) || flight.duration <= 0) {
     return {valid: false, score: null, invalidReason: '滞空时间无效'};
   }
   return {valid: true, score: flight.duration};
+}
+
+/** 精准赛低分优;其余项目高分优。 */
+export function isLowerBetter(event: CompetitionEvent): boolean {
+  return event === 'accuracy';
 }
 
 /** Commit the active player's throw and advance the turn/round state immutably. */
@@ -191,7 +208,7 @@ export function recordCompetitionThrow(
   if (!turn) {
     throw new Error('当前比赛未在进行中，无法记录成绩');
   }
-  const evalRes = evaluateThrow(match.event, flight);
+  const evalRes = evaluateThrow(match.event, flight, match.accuracyTarget);
   const record: ThrowRecord = {
     round: turn.round,
     playerId: turn.player.id,
@@ -270,7 +287,8 @@ export function computeStandings(match: CompetitionMatch): PlayerStanding[] {
     if (a.bestScore === null && b.bestScore === null) return 0;
     if (a.bestScore === null) return 1;
     if (b.bestScore === null) return -1;
-    return compareScoreArrays(a.sortedValidScores, b.sortedValidScores);
+    const cmp = compareScoreArrays(a.sortedValidScores, b.sortedValidScores);
+    return isLowerBetter(match.event) ? -cmp : cmp;
   });
 
   const standings: PlayerStanding[] = [];

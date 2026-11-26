@@ -44,7 +44,8 @@ npm run calibrate -- --convergence
    - **Suzanne**（A4 100g，0° / 28 m/s）：`68.69 m` / `8.02 s`（历史纪录 69.14 m / ~9 s）；
    - **Mach 5**（A4 100g，40° / 28 m/s）：`89.99 m`（历史纪录 88 m）；
    - **Sky King**（A4 80g，20° / 8 m/s）：`29.36 s`（历史纪录 27.9 s / 挑战赛锚点 29.2 s）。
-5. **渲染、音效、挑战赛与分享（`src/render/`、`src/game/`、`src/audio/`）**：
+5. **本地锦标赛三项目（`src/game/competition.ts`、`src/game/accuracy.ts`，Phase 07）**：距离赛 / 滞空赛 / **精准着陆赛**（靶线距离由种子确定性生成、同场同靶、距靶偏差低分优排名），Canvas 侧视与俯视均绘制朱红靶线；个人最佳按项目方向（高/低分优）分别保存。
+6. **渲染、音效、挑战赛与分享（`src/render/`、`src/game/`、`src/audio/`）**：
    - **三维视图（`src/render/flight3d.ts`，Phase 05，可选）**：Three.js WebGL 展示折叠完成态纸面网格、3D 弹道与姿态（拖拽轨道 + 滚轮缩放）；按需动态加载代码分包，WebGL 不可用自动回退 Canvas 2D；渲染层只消费纯数据，不反哺物理。
    - 遵循 `docs/DESIGN.md`「作业本 × 航空图鉴」视觉规范；
    - 支持距离挑战（88 m）与滞空挑战（29.2 s）、本机最佳幽灵机同屏重放、破纪录纸屑雨动效、URL `#flight=` 确定性配置分享及 Web Audio 程序化折纸/风声/落地音效。

@@ -20,6 +20,8 @@ export type FlightRenderOptions = {
   paused?: boolean;
   /** v5 俯视模式:画布改为 x–z 平面(顶视),展示侧风漂移与偏航。 */
   topView?: boolean;
+  /** Phase 07 精准赛靶线距离(m);设置后绘制朱红靶线。 */
+  accuracyTarget?: number;
 };
 
 /**
@@ -80,6 +82,23 @@ function renderTopDownView(
   c.moveTo(mapX(0), margin / 2);
   c.lineTo(mapX(0), 600 - margin / 2);
   c.stroke();
+  // 精准赛靶线
+  if (options.accuracyTarget !== undefined) {
+    const tx = mapX(options.accuracyTarget);
+    c.save();
+    c.strokeStyle = '#D9482B';
+    c.lineWidth = 2;
+    c.setLineDash([12, 6, 2, 6]);
+    c.beginPath();
+    c.moveTo(tx, margin / 2);
+    c.lineTo(tx, 600 - margin / 2);
+    c.stroke();
+    c.setLineDash([]);
+    c.fillStyle = '#D9482B';
+    c.font = '12px "IBM Plex Mono", monospace';
+    c.fillText(`靶线 ${options.accuracyTarget}m`, tx + 4, margin / 2 + 14);
+    c.restore();
+  }
   c.fillStyle = '#6B7280';
   c.font = '12px "IBM Plex Mono", monospace';
   for (let gx = 0; gx <= maxX; gx += 10) {
@@ -250,6 +269,23 @@ export function renderFlightCanvas(
   c.fillStyle = '#7FA86B';
   c.fillRect(0, 520, 960, 80);
   drawGrassBlades(c, minX, maxX, mapX);
+  // 精准赛靶线(朱红点划线 + 标签),只读展示,不参与物理
+  if (options.accuracyTarget !== undefined) {
+    const tx = mapX(options.accuracyTarget);
+    c.save();
+    c.strokeStyle = '#D9482B';
+    c.lineWidth = 2;
+    c.setLineDash([12, 6, 2, 6]);
+    c.beginPath();
+    c.moveTo(tx, 90);
+    c.lineTo(tx, 520);
+    c.stroke();
+    c.setLineDash([]);
+    c.fillStyle = '#D9482B';
+    c.font = '12px "IBM Plex Mono", monospace';
+    c.fillText(`靶线 ${options.accuracyTarget}m`, tx + 5, 104);
+    c.restore();
+  }
   c.strokeStyle = '#1F3A5F';
   c.lineWidth = 1.5;
   c.beginPath();
