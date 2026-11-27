@@ -30,6 +30,8 @@ export type SimulationOptions = {
   windSeed?: number;
   /** 2.12:结构化环境覆盖(垂直风/密度/黏度的实验输入),参与实际求解。 */
   environment?: Partial<Environment>;
+  /** 仅历史对照:恢复 v4/v5 折痕质量力乘数通道(默认关闭,Phase 04 / 4.7)。 */
+  legacyQualityChannel?: boolean;
 };
 export type Flight = {
   samples: Sample[];
@@ -161,11 +163,15 @@ export function simulate(a: Aero, input: Throw, options: SimulationOptions = {})
     const st = (e0: number, e1: number, x: number) => { const t = Math.max(0, Math.min(1, (x - e0) / (e1 - e0))); return t * t * (3 - 2 * t); };
     return cambered * (1 - enduranceMode) * (1 - penetratorMode) * st(0.92, 1.04, sl) * st(0.088, 0.068, sm);
   })();
+  // Phase 04 / 4.7:快速路径同样默认不把折痕质量乘进升阻;legacy 通道仅对照
+  const qualityForModel = options.legacyQualityChannel ? quality : 1;
   const shapeKeep = (() => {
     const crisp = options.material ? creaseCrispness(options.material.grade.id) / creaseCrispness('copy') : 1;
-    return Math.min(1, quality * crisp);
+    return Math.min(1, qualityForModel * crisp);
   })();
-  const forceScale = {lift: 1 - 0.1 * (1 - quality), drag: 1 + 0.25 * (1 - quality)};
+  const forceScale = options.legacyQualityChannel
+    ? {lift: 1 - 0.1 * (1 - quality), drag: 1 + 0.25 * (1 - quality)}
+    : {lift: 1, drag: 1};
   // 配平用有限翼斜率(与 model.ts 俯仰阻尼斜率不同,两者不可混用)
   const clSlope = (Math.PI * a.aspectRatio) / (1 + Math.sqrt(1 + (a.aspectRatio / 2) ** 2));
   const samples: Sample[] = [makeSample(t, x, y, pitch, z, psi, phi, {x: vx, y: vy, z: vz}, solverCtx, env, t)];

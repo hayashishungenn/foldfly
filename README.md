@@ -21,6 +21,10 @@ npm run aero-report
 npx playwright test   # 浏览器端到端(需系统 Chrome)
 ```
 
+## 纸张材料、折叠精度与调校
+
+纸张采用三层模型:规格(A4/A3/A6/A5/B5/Letter/正方形 + 自定义)× 材料(8 种,含来源与可信度)× 克重;折叠兼容性在开始前预检。手工折痕偏差以真实折痕偏移进入几何(非成绩乘数,FLIGHT_MODEL_VERSION=6),材质定形与调校(左右上反/后缘/结构刚度估计)通过求解器生效;结构分析面板展示左右翼面积/对称度/折层/刚度区间。详见 [docs/MATERIALS.md](docs/MATERIALS.md);`npm run sensitivity` 输出材料敏感性对照。
+
 ## 折纸拓扑与三维几何
 
 `src/fold/topology.ts` 提供面片级拓扑追踪(稳定 ID、来源链、层叠索引、折痕记录,与引擎同剖分原语、面积守恒);`src/fold/geometry-out.ts` 输出统一 3D 面片/法向/面积/三角网格供渲染与气动消费;统一几何容差在 `src/fold/geometry-constants.ts`;折叠会话可版本化序列化。展翼新增显式翼根 `openRoot`(支持倾斜翼根)。能力边界与不支持项见 [docs/FOLD-TOPOLOGY.md](docs/FOLD-TOPOLOGY.md)。

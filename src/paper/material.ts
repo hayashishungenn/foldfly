@@ -9,7 +9,9 @@
  *   Phase 02 才把折痕质量与材质刚度耦合进气动模型,并递增版本号。
  */
 
-export type PaperGradeId = 'copy' | 'laser' | 'coated' | 'origami' | 'news';
+export type PaperGradeId = 'copy' | 'laser' | 'coated' | 'origami' | 'news' | 'kraft' | 'writing' | 'tissue';
+
+export type MaterialConfidence = 'literature-range' | 'estimated';
 
 export type PaperGrade = {
   id: PaperGradeId;
@@ -23,6 +25,18 @@ export type PaperGrade = {
   youngModulusCD: number;
   /** 表面涂布/施胶光滑度代理:未涂布 ≈ 1,涂布纸 > 1 */
   surfaceSmoothness: number;
+  /** 4.3:用途说明 */
+  usage: string;
+  /** 4.3:适用克重范围 g/m² */
+  gsmRange: readonly [number, number];
+  /** 4.3:表面粗糙度代理(0–1,越大越粗糙) */
+  roughness: number;
+  /** 4.3:折痕保持特性代理(0–1,越大保持越好) */
+  creaseRetention: number;
+  /** 4.3:参数来源(文献区间/经验估计) */
+  source: string;
+  /** 4.3:数据可信程度 */
+  confidence: MaterialConfidence;
 };
 
 /** 材质等级库。参数为经验区间中值(非实测),标注见各字段。 */
@@ -35,6 +49,12 @@ export const grades: readonly PaperGrade[] = [
     youngModulusMD: 4.2e9,
     youngModulusCD: 2.4e9,
     surfaceSmoothness: 1.0,
+    usage: '办公打印/复印',
+    gsmRange: [60, 120],
+    roughness: 0.55,
+    creaseRetention: 0.62,
+    source: '造纸物理文献常见区间中值(复印纸 E_MD 3–5 GPa、紧度 750–850 kg/m³)',
+    confidence: 'literature-range',
   },
   {
     id: 'laser',
@@ -44,6 +64,12 @@ export const grades: readonly PaperGrade[] = [
     youngModulusMD: 5.2e9,
     youngModulusCD: 3.0e9,
     surfaceSmoothness: 1.0,
+    usage: '高挺度激光打印/正式文件',
+    gsmRange: [70, 120],
+    roughness: 0.5,
+    creaseRetention: 0.7,
+    source: '文献区间上沿(高挺度办公纸 E_MD 4.5–6 GPa)',
+    confidence: 'literature-range',
   },
   {
     id: 'coated',
@@ -53,6 +79,12 @@ export const grades: readonly PaperGrade[] = [
     youngModulusMD: 3.6e9,
     youngModulusCD: 2.1e9,
     surfaceSmoothness: 1.35,
+    usage: '画册/彩印铜版纸',
+    gsmRange: [70, 200],
+    roughness: 0.35,
+    creaseRetention: 0.55,
+    source: '涂布纸文献区间中值(涂层提高表面光滑度、降低松厚度)',
+    confidence: 'literature-range',
   },
   {
     id: 'origami',
@@ -62,6 +94,12 @@ export const grades: readonly PaperGrade[] = [
     youngModulusMD: 2.6e9,
     youngModulusCD: 1.7e9,
     surfaceSmoothness: 0.95,
+    usage: '折纸/模型专用纸',
+    gsmRange: [50, 120],
+    roughness: 0.6,
+    creaseRetention: 0.5,
+    source: '折纸纸文献区间中值(薄而柔韧、低挺度)',
+    confidence: 'literature-range',
   },
   {
     id: 'news',
@@ -71,6 +109,57 @@ export const grades: readonly PaperGrade[] = [
     youngModulusMD: 1.9e9,
     youngModulusCD: 1.2e9,
     surfaceSmoothness: 0.9,
+    usage: '报纸/新闻纸',
+    gsmRange: [40, 60],
+    roughness: 0.85,
+    creaseRetention: 0.25,
+    source: '新闻纸文献区间中值(低紧度、低强度、折痕保持差)',
+    confidence: 'literature-range',
+  },
+  {
+    id: 'kraft',
+    name: '牛皮纸',
+    hint: '高韧性包装纸，抗撕裂但表面粗糙、折痕回弹强',
+    caliperFactor: 1.35,
+    youngModulusMD: 3.2e9,
+    youngModulusCD: 2.2e9,
+    surfaceSmoothness: 0.7,
+    usage: '包装/信封/手工',
+    gsmRange: [80, 160],
+    roughness: 0.9,
+    creaseRetention: 0.75,
+    source: '牛皮纸文献区间估计(高撕裂度、中高挺度);本作未实测',
+    confidence: 'estimated',
+  },
+  {
+    id: 'writing',
+    name: '书写纸',
+    hint: '手写笔记本用纸，表面施胶、比复印纸更致密',
+    caliperFactor: 1.12,
+    youngModulusMD: 3.8e9,
+    youngModulusCD: 2.3e9,
+    surfaceSmoothness: 1.1,
+    usage: '笔记本/信笺',
+    gsmRange: [60, 100],
+    roughness: 0.4,
+    creaseRetention: 0.66,
+    source: '书写纸文献区间估计(施胶、紧度略高于复印纸);本作未实测',
+    confidence: 'estimated',
+  },
+  {
+    id: 'tissue',
+    name: '轻质薄纸',
+    hint: '拷贝纸/薄页纸，极薄极轻，仅适合轻柔试飞',
+    caliperFactor: 1.9,
+    youngModulusMD: 1.5e9,
+    youngModulusCD: 0.9e9,
+    surfaceSmoothness: 0.8,
+    usage: '拷贝/薄页/轻包装',
+    gsmRange: [30, 60],
+    roughness: 0.8,
+    creaseRetention: 0.2,
+    source: '薄页纸文献区间估计(低挺度、低定量);本场未实测',
+    confidence: 'estimated',
   },
 ];
 
@@ -171,6 +260,9 @@ const GRADE_NOTES: Record<PaperGradeId, string> = {
   coated: '翼面最平整,厚折层回弹偏大',
   origami: '最柔韧,多步折序服帖',
   news: '最松软,折痕保持最弱',
+  kraft: '最韧,折痕回弹强、表面粗糙',
+  writing: '致密光滑,折叠手感接近复印纸',
+  tissue: '极薄极轻,几乎不保持折痕',
 };
 
 /** One-line human-readable summary for UI and CLI reports. */

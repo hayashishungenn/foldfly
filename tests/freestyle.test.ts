@@ -38,7 +38,7 @@ describe('自由折纸设计(Phase 03 纯逻辑)', () => {
 
   it('构建设计时拒绝未知纸张、空名称和超过上限的折痕', () => {
     expect(() => buildDesign('a4', '我的设计', [centerFold])).not.toThrow();
-    expect(() => buildDesign('a3' as never, '我的设计', [centerFold])).toThrow();
+    expect(() => buildDesign('a2' as never, '我的设计', [centerFold])).toThrow();
     expect(() => buildDesign('a4', '   ', [centerFold])).toThrow();
     expect(() => buildDesign('a4', 'x', Array.from({length: MAX_FREESTYLE_CREASES + 1}, () => centerFold))).toThrow();
   });

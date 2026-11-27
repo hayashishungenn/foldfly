@@ -45,6 +45,8 @@ export type SolverOptions = {
   foldQuality?: number;
   material?: MaterialProfile;
   model?: 'v5' | 'baseline';
+  /** 仅历史对照:恢复 v4/v5 的折痕质量力乘数通道 */
+  legacyQualityChannel?: boolean;
 };
 
 export type DragBreakdown = {
@@ -137,7 +139,11 @@ export function prepareSolver(aero: Aero, options: SolverOptions = {}): SolverCo
   const slenderness = aero.chord / Math.max(1e-6, aero.span);
   const bodyRatio = (aero.bodySideArea ?? 0) / Math.max(1e-6, aero.wingArea);
   const crispNorm = options.material ? creaseCrispness(options.material.grade.id) / creaseCrispness('copy') : 1;
-  const shapeKeep = model === 'baseline' ? 1 : Math.min(1, quality * crispNorm);
+  // Phase 04 / 4.7:折痕质量不再直接乘在升阻上;默认仅材质定形(crispness)参与,
+  // 手工折叠误差通过真实几何偏移(adjustments.ts)进入质量分布与翼面。
+  // legacyQualityChannel 仅为历史对照测试保留。
+  const qualityForModel = options.legacyQualityChannel ? quality : 1;
+  const shapeKeep = model === 'baseline' ? 1 : Math.min(1, qualityForModel * crispNorm);
   const cambered = model === 'baseline' ? 0 : smoothstep(0.61, 0.655, fullness);
   const enduranceMode = cambered * smoothstep(1.45, 1.68, ar) * smoothstep(0.062, 0.042, sm);
   const penetratorMode = cambered * smoothstep(0.095, 0.12, sm) * smoothstep(1.08, 1.40, slenderness);
@@ -154,6 +160,7 @@ export function prepareSolver(aero: Aero, options: SolverOptions = {}): SolverCo
       experimentalHeightMoment: options.experimentalHeightMoment ?? false,
       foldQuality: quality,
       model,
+      legacyQualityChannel: options.legacyQualityChannel ?? false,
       ...(options.material ? {material: options.material} : {}),
     },
     gates: {
@@ -162,8 +169,8 @@ export function prepareSolver(aero: Aero, options: SolverOptions = {}): SolverCo
       penetratorMode,
       distanceGliderMode,
       shapeKeep,
-      forceLift: 1 - 0.1 * (1 - quality),
-      forceDrag: 1 + 0.25 * (1 - quality),
+      forceLift: options.legacyQualityChannel ? 1 - 0.1 * (1 - quality) : 1,
+      forceDrag: options.legacyQualityChannel ? 1 + 0.25 * (1 - quality) : 1,
       clSlope: (Math.PI * ar) / (1 + Math.sqrt(1 + (ar / 2) ** 2)),
       ar, slenderness, bodyRatio, cyBeta, cnBeta, cnrNorm,
       clBeta: -1.1 * ((aero.bodySideArea ?? 0) * Math.max(0, aero.cgDepth)) / Math.max(1e-6, aero.wingArea * span),

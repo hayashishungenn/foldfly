@@ -42,10 +42,11 @@ describe('v4 折痕质量与材质定形通道', () => {
     for (const plane of ['dart', 'suzanne'] as const) {
       const a = aero(plane);
       const perfect = simulate(a, launch, {foldQuality: 1});
-      const sloppy = simulate(a, launch, {foldQuality: 0.6});
+      // 4.7 后默认路径不再用质量乘数;此处显式启用历史通道验证 v4 通道仍可复现
+      const sloppy = simulate(a, launch, {foldQuality: 0.6, legacyQualityChannel: true});
       expect(sloppy.distance).toBeLessThan(perfect.distance);
       expect(sloppy.duration).toBeGreaterThan(0);
-      const worse = simulate(a, launch, {foldQuality: 0.2});
+      const worse = simulate(a, launch, {foldQuality: 0.2, legacyQualityChannel: true});
       expect(worse.distance).toBeLessThan(sloppy.distance);
     }
   });
@@ -66,7 +67,7 @@ describe('v4 折痕质量与材质定形通道', () => {
     const input: Throw = {angle: 20, speed: 8, wind: 0};
     const a = aero('skyking');
     const newsGood = simulate(a, input, {foldQuality: 1, material: materialProfile('news', 80)});
-    const newsSloppy = simulate(a, input, {foldQuality: 0.5, material: materialProfile('news', 80)});
+    const newsSloppy = simulate(a, input, {foldQuality: 0.5, material: materialProfile('news', 80), legacyQualityChannel: true});
     expect(newsSloppy.duration).toBeLessThan(newsGood.duration);
     expect(newsSloppy.distance).toBeLessThan(newsGood.distance);
   });

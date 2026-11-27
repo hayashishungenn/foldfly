@@ -46,6 +46,9 @@ button:disabled{opacity:.45;cursor:default}
 .paper-icon.square{height:42px}
 .paper-icon.a5{width:30px;height:42px}
 .paper-icon.b5{width:35px;height:50px}
+.paper-icon.a3{width:56px;height:78px}
+.paper-icon.a6{width:21px;height:29px}
+.trim-controls{border-top:1px dashed var(--grid-line);padding-top:10px;margin-top:10px}
 .mono{font-family:'IBM Plex Mono',monospace}
 .weights{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
 .weight-hint{color:var(--pencil);font-size:13px;margin-top:8px}

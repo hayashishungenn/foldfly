@@ -22,7 +22,7 @@ describe('积分步长验证',()=>{
   expect(grid.every(row=>row.standard.landed&&row.reference.landed)).toBe(true);
   expect(grid[0].distanceDifference).toBeLessThan(.1);
  });
- it('克重与风速边界下的落点也能收敛',()=>{
+ it('克重与风速边界下的落点也能收敛',{timeout: 30000},()=>{
   const inputs=[0,20,45,75].flatMap(angle=>[6,15,28].flatMap(speed=>[-4,4].map(wind=>({angle,speed,wind}))));
   const grid=convergenceGrid(inputs,[70,100]);
   expect(grid).toHaveLength(Object.keys(planes).length*papers.length*2*inputs.length);

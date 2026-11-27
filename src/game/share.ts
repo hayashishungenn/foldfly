@@ -5,8 +5,9 @@ import type {FoldStep} from '../fold/planes/dart';
 import {FLIGHT_MODEL_VERSION} from '../aero/integrator';
 import type {Flight} from '../aero/integrator';
 import {FOLD_ENGINE_VERSION} from '../fold/engine';
+import type {TrimConfig} from '../paper/trim';
 export type SharedResult={distance:number;duration:number;height:number};
-export type SharedFlight = {version:1;plane:PlaneId;paper:Paper['id'];gsm:typeof weights[number];angle:number;speed:number;wind:number;crosswind?:number;step:number;grade?:PaperGradeId;foldSignature?:string;foldEngineVersion?:number;modelVersion?:number;challenge?:'distance'|'duration';result?:SharedResult};
+export type SharedFlight = {version:1;plane:PlaneId;paper:Paper['id'];gsm:typeof weights[number];angle:number;speed:number;wind:number;crosswind?:number;step:number;grade?:PaperGradeId;creases?:Record<string,{ax:number;ay:number;bx:number;by:number}>;trim?:TrimConfig;foldSignature?:string;foldEngineVersion?:number;modelVersion?:number;challenge?:'distance'|'duration';result?:SharedResult};
 /** FNV-1a over the program; detects edits even when the step count is unchanged. */
 function hashProgram(value:unknown):string {
  let hash=2166136261;
@@ -38,6 +39,27 @@ export function decodeFlight(hash:string):SharedFlight|null {
   for(const [key,min,max] of [['angle',0,75],['speed',6,28],['wind',-4,4]] as const)if(typeof x[key]!=='number'||!Number.isFinite(x[key])||x[key]<min||x[key]>max)return null;
   // 侧风为可选字段(v5):缺省 0,非法值拒绝
   if(x.crosswind!==undefined&&(typeof x.crosswind!=='number'||!Number.isFinite(x.crosswind)||Math.abs(x.crosswind)>4))return null;
+  // Phase 04:折痕偏移与调校为可选字段,逐项验证
+  if(x.creases!==undefined){
+   if(typeof x.creases!=='object'||x.creases===null||Array.isArray(x.creases))return null;
+   const entries=Object.entries(x.creases);
+   if(entries.length>60)return null;
+   for(const [key,o] of entries){
+    if(!/^\d+:\d+$/.test(key))return null;
+    if(!o||typeof o!=='object')return null;
+    const co=o as {ax?:number;ay?:number;bx?:number;by?:number};
+    const vals=[co.ax,co.ay,co.bx,co.by];
+    if(!vals.every(v=>typeof v==='number'&&Number.isFinite(v)&&Math.abs(v)<=0.04))return null;
+   }
+  }
+  if(x.trim!==undefined){
+   const t=x.trim;
+   if(!t||typeof t!=='object')return null;
+   for(const [key,max] of [['dihedralLeft',20],['dihedralRight',20],['winglet',90],['trailingEdge',10]] as const){
+    const v=(t as Record<string,unknown>)[key];
+    if(typeof v!=='number'||!Number.isFinite(v)||Math.abs(v)>max)return null;
+   }
+  }
   return x;
  } catch { return null }
 }
